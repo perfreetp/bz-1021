@@ -47,7 +47,9 @@ export const openWindow = async (name: string, query?: Record<string, string>) =
 }
 
 export const getQueryParams = (): Record<string, string> => {
-  const search = window.location.hash.split('?')[1] || ''
+  const hashSearch = window.location.hash.split('?')[1] || ''
+  const urlSearch = window.location.search.slice(1) || ''
+  const search = hashSearch || urlSearch
   const params = new URLSearchParams(search)
   const result: Record<string, string> = {}
   params.forEach((v, k) => { result[k] = v })

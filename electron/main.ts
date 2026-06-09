@@ -60,7 +60,7 @@ function createWindow(config: WindowConfig, query?: Record<string, string>) {
         win.loadURL(targetURL)
       }
     } else {
-      const targetURL = 'file://' + path.join(RENDERER_DIST, 'index.html').replace(/\\/g, '/') + '/#' + config.route + queryStr
+      const targetURL = 'file://' + path.join(RENDERER_DIST, 'index.html').replace(/\\/g, '/') + '#' + config.route + queryStr
       try {
         win.webContents.send('switch-case', query || {})
       } catch {}
@@ -97,7 +97,7 @@ function createWindow(config: WindowConfig, query?: Record<string, string>) {
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL + '/#' + config.route + queryStr)
   } else {
-    const targetURL = 'file://' + path.join(RENDERER_DIST, 'index.html').replace(/\\/g, '/') + '/#' + config.route + queryStr
+    const targetURL = 'file://' + path.join(RENDERER_DIST, 'index.html').replace(/\\/g, '/') + '#' + config.route + queryStr
     win.loadURL(targetURL)
   }
 

@@ -350,8 +350,9 @@ export function buildDoctorStats(cases: CaseRecord[] = caseRecords): DoctorStats
     const passedCases = doctorCases.filter(c => c.status === '已通过').length
     const returnedCases = doctorCases.filter(c => c.status === '已退回').length
     const disputedCases = doctorCases.filter(c => c.status === '争议中').length
-    const avgScore = totalCases
-      ? doctorCases.reduce((s, c) => s + c.qcTotalScore, 0) / totalCases
+    const reviewedCases = doctorCases.filter(c => c.status !== '待复核' && c.status !== '复核中')
+    const avgScore = reviewedCases.length
+      ? reviewedCases.reduce((s, c) => s + c.qcTotalScore, 0) / reviewedCases.length
       : 0
 
     const monthMap = new Map<string, { total: number; scoreSum: number }>()
@@ -412,8 +413,9 @@ export function buildMonthlySummary(monthsBack: number = 6, cases: CaseRecord[] 
     const passRate = reviewedCases ? passedCases / reviewedCases : 0
     const returnRate = reviewedCases ? returnedCases / reviewedCases : 0
     const disputeRate = reviewedCases ? disputedCases / reviewedCases : 0
+    const reviewedCaseList = monthCases.filter(c => c.status !== '待复核' && c.status !== '复核中')
     const avgScore = reviewedCases
-      ? monthCases.filter(c => c.status !== '待复核').reduce((s, c) => s + c.qcTotalScore, 0) / reviewedCases
+      ? reviewedCaseList.reduce((s, c) => s + c.qcTotalScore, 0) / reviewedCases
       : 0
 
     const problemCount = new Map<string, number>()

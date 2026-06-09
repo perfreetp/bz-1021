@@ -469,6 +469,7 @@ const DiagnosisPage: React.FC = () => {
                               style={{ width: '100%' }}
                               min={0} max={200} step={0.5}
                               placeholder="输入病变大小"
+                              value={g.size ?? undefined}
                               onChange={v => setLesionGrades({
                                 ...lesionGrades,
                                 [l.id]: { ...g, size: v || 0 }

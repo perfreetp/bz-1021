@@ -53,38 +53,30 @@ const broadcast = (event: BroadcastEvent) => {
 
 const mergeCases = (persisted: CaseRecord[], fresh: CaseRecord[]): CaseRecord[] => {
   const persMap = new Map(persisted.map(c => [c.id, c]))
+  const freshMap = new Map(fresh.map(c => [c.id, c]))
   const result: CaseRecord[] = []
+
+  persisted.forEach(pc => {
+    const fc = freshMap.get(pc.id)
+    result.push({
+      ...pc,
+      imageAnnotations: pc.imageAnnotations ?? [],
+      lesionGrades: pc.lesionGrades ?? {},
+      biopsyVerifications: pc.biopsyVerifications ?? {},
+      biopsyAssessment: pc.biopsyAssessment,
+      lastModified: pc.lastModified || (fc ? fc.lastModified : new Date().toISOString()),
+      reportIssues: Array.isArray(pc.reportIssues) && pc.reportIssues.length > 0
+        ? pc.reportIssues
+        : (fc ? fc.reportIssues : [])
+    })
+  })
+
   fresh.forEach(fc => {
-    const pc = persMap.get(fc.id)
-    if (pc) {
-      result.push({
-        ...fc,
-        status: pc.status,
-        qcScores: pc.qcScores,
-        qcTotalScore: pc.qcTotalScore,
-        reviewComment: pc.reviewComment,
-        reviewDate: pc.reviewDate,
-        reviewer: pc.reviewer,
-        reportIssues: [
-          ...pc.reportIssues.filter(r => r.source === '手动添加' || r.fixed),
-          ...fc.reportIssues.filter(r => !pc.reportIssues.some(pr => pr.id === r.id))
-        ],
-        disputes: pc.disputes.length > 0 ? pc.disputes : fc.disputes,
-        imageAnnotations: pc.imageAnnotations || [],
-        lesionGrades: { ...fc.lesionGrades, ...(pc.lesionGrades || {}) },
-        biopsyVerifications: { ...fc.biopsyVerifications, ...(pc.biopsyVerifications || {}) },
-        biopsyAssessment: pc.biopsyAssessment || fc.biopsyAssessment,
-        lastModified: pc.lastModified || fc.lastModified
-      })
-    } else {
+    if (!persMap.has(fc.id)) {
       result.push(fc)
     }
   })
-  persisted.forEach(pc => {
-    if (!fresh.some(fc => fc.id === pc.id)) {
-      result.push(pc)
-    }
-  })
+
   return result
 }
 

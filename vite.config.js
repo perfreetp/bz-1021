@@ -4,6 +4,7 @@ import electron from 'vite-plugin-electron';
 import renderer from 'vite-plugin-electron-renderer';
 import { fileURLToPath, URL } from 'node:url';
 export default defineConfig({
+    base: './',
     resolve: {
         alias: {
             '@': fileURLToPath(new URL('./src', import.meta.url))
