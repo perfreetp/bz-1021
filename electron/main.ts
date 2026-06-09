@@ -35,15 +35,40 @@ const windowConfigs: WindowConfig[] = [
 ]
 
 function createWindow(config: WindowConfig, query?: Record<string, string>) {
+  const queryStr = query
+    ? '?' + new URLSearchParams(query).toString()
+    : ''
+  const titleSuffix = (query?.caseNo && query?.patientName)
+    ? ` · ${query.caseNo} ${query.patientName}`
+    : (query?.caseId ? ` · 病例 ${query.caseId}` : '')
+
   if (windows.has(config.name)) {
     const win = windows.get(config.name)!
     if (win.isMinimized()) win.restore()
     win.focus()
+
+    win.setTitle(config.title + titleSuffix)
+
+    if (VITE_DEV_SERVER_URL) {
+      const targetURL = VITE_DEV_SERVER_URL + '/#' + config.route + queryStr
+      try {
+        win.webContents.send('switch-case', query || {})
+        setTimeout(() => {
+          if (!win.isDestroyed()) win.loadURL(targetURL)
+        }, 30)
+      } catch {
+        win.loadURL(targetURL)
+      }
+    } else {
+      try {
+        win.webContents.send('switch-case', query || {})
+      } catch {}
+    }
     return win
   }
 
   const win = new BrowserWindow({
-    title: config.title,
+    title: config.title + titleSuffix,
     width: config.width,
     height: config.height,
     minWidth: config.minWidth || 800,
@@ -66,9 +91,6 @@ function createWindow(config: WindowConfig, query?: Record<string, string>) {
   })
 
   if (VITE_DEV_SERVER_URL) {
-    const queryStr = query
-      ? '?' + new URLSearchParams(query).toString()
-      : ''
     win.loadURL(VITE_DEV_SERVER_URL + '/#' + config.route + queryStr)
   } else {
     win.loadFile(path.join(RENDERER_DIST, 'index.html'), {

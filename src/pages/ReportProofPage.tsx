@@ -44,13 +44,13 @@ const nonStandardTerms: { wrong: string; correct: string; note: string }[] = [
 const ReportProofPage: React.FC = () => {
   const { message, modal } = App.useApp()
   const {
-    cases, setCurrentCase, customIssues, addCustomIssue, removeCustomIssue
+    cases, setCurrentCase, addReportIssue, removeReportIssue, toggleIssueFixed, setBiopsyVerification
   } = useAppStore()
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
   const [addIssueModal, setAddIssueModal] = useState(false)
   const [form] = Form.useForm()
   const [biopsyVerified, setBiopsyVerified] = useState<Record<string, boolean>>({})
-  const [issueFixed, setIssueFixed] = useState<Record<string, boolean>>({})
+  const [termFixed, setTermFixed] = useState<Record<string, boolean>>({})
   const [reportChecked, setReportChecked] = useState(false)
 
   useEffect(() => {
@@ -61,26 +61,23 @@ const ReportProofPage: React.FC = () => {
       ? caseList.find(c => c.id === id)
       : caseList.find(c => c.reportIssues.length > 0) || caseList[0]
     if (target) {
-      setCurrentCase(target.id)
+      setCurrentCase(target.id, false)
       setSelectedCaseId(target.id)
       const initBio: Record<string, boolean> = {}
-      target.biopsy.forEach(b => { initBio[b.bottleNo] = !!b.verified })
+      target.biopsy.forEach(b => {
+        const persisted = target.biopsyVerifications?.[b.bottleNo]
+        initBio[b.bottleNo] = persisted ? (persisted.siteMatch && persisted.bottleMatch) : !!b.verified
+      })
       setBiopsyVerified(initBio)
-      const initFixed: Record<string, boolean> = {}
-      target.reportIssues.forEach(i => { initFixed[i.id] = false })
-      setIssueFixed(initFixed)
     }
-  }, [])
+  }, [cases.length])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 
   const allIssues = useMemo(() => {
     if (!case_) return []
-    return [
-      ...case_.reportIssues.map(i => ({ ...i, source: '系统检测' as const })),
-      ...(customIssues[case_.id] || []).map(i => ({ ...i, source: '手动添加' as const }))
-    ]
-  }, [case_, customIssues])
+    return case_.reportIssues
+  }, [case_])
 
   if (!case_) {
     return (
@@ -126,26 +123,33 @@ const ReportProofPage: React.FC = () => {
   const highIssues = allIssues.filter(i => i.severity === '高')
   const medIssues = allIssues.filter(i => i.severity === '中')
   const lowIssues = allIssues.filter(i => i.severity === '低')
-  const fixedCount = Object.values(issueFixed).filter(Boolean).length
+  const fixedCount = allIssues.filter(i => i.fixed).length + Object.values(termFixed).filter(Boolean).length
   const totalIssueForFix = allIssues.length + termCheckResult.length
   const checkProgress = totalIssueForFix === 0 ? 100 : Math.round(fixedCount / totalIssueForFix * 100)
 
   const submitAddIssue = () => {
     form.validateFields().then(values => {
-      const issue: ReportIssue = {
-        id: 'CI-' + Date.now(),
+      addReportIssue(case_.id, {
         type: values.type,
         severity: values.severity,
-        field: values.field,
+        field: Array.isArray(values.field) ? values.field.join('/') : values.field,
         original: values.original || '',
         suggestion: values.suggestion,
         description: values.description
-      }
-      addCustomIssue(case_.id, issue)
-      setIssueFixed(prev => ({ ...prev, [issue.id]: false }))
-      message.success('已添加自定义问题')
+      })
+      message.success('已添加自定义问题并保存')
       setAddIssueModal(false)
       form.resetFields()
+    })
+  }
+
+  const handleBiopsyVerify = (bottleNo: string, val: boolean) => {
+    const next = { ...biopsyVerified, [bottleNo]: val }
+    setBiopsyVerified(next)
+    setBiopsyVerification(case_.id, bottleNo, {
+      bottleNo,
+      siteMatch: val,
+      bottleMatch: val
     })
   }
 
@@ -164,7 +168,7 @@ const ReportProofPage: React.FC = () => {
       cancelText: '继续校对',
       onOk: () => {
         setReportChecked(true)
-        openWindow('qc-score', { caseId: case_.id })
+        openWindow('qc-score', { caseId: case_.id, caseNo: case_.caseNo, patientName: case_.patient.name })
       }
     })
   }
@@ -261,9 +265,7 @@ const ReportProofPage: React.FC = () => {
                       render: (_, r) => (
                         <Checkbox
                           checked={!!biopsyVerified[r.bottleNo]}
-                          onChange={e => setBiopsyVerified({
-                            ...biopsyVerified, [r.bottleNo]: e.target.checked
-                          })}
+                          onChange={e => handleBiopsyVerify(r.bottleNo, e.target.checked)}
                         />
                       )
                     }
@@ -316,18 +318,29 @@ const ReportProofPage: React.FC = () => {
                   <div key={i.id} className={`issue-card severity-${i.severity === '高' ? 'high' : i.severity === '中' ? 'medium' : 'low'}`}>
                     <div className="issue-header" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Checkbox
-                        checked={!!issueFixed[i.id]}
-                        onChange={e => setIssueFixed({ ...issueFixed, [i.id]: e.target.checked })}
+                        checked={!!i.fixed}
+                        onChange={e => toggleIssueFixed(case_.id, i.id, e.target.checked)}
                       />
                       <span className="issue-type">
                         <Tag color={i.severity === '高' ? 'red' : i.severity === '中' ? 'orange' : 'default'}>{i.severity}</Tag>
                         {i.type}
                       </span>
-                      <Tag color={i.source === '系统检测' ? 'blue' : 'purple'}>{i.source}</Tag>
+                      <Tag color={(i.source || '系统检测') === '系统检测' ? 'blue' : 'purple'}>{i.source || '系统检测'}</Tag>
                       <span className="issue-field">【{i.field}】</span>
                       {i.source === '手动添加' && (
                         <Button size="small" type="text" danger icon={<DeleteOutlined />}
-                          onClick={() => removeCustomIssue(case_.id, i.id)} />
+                          onClick={() => {
+                            modal.confirm({
+                              title: '删除问题？',
+                              content: i.description,
+                              okText: '永久删除',
+                              okButtonProps: { danger: true },
+                              onOk: () => {
+                                removeReportIssue(case_.id, i.id)
+                                message.success('已删除此问题')
+                              }
+                            })
+                          }} />
                       )}
                     </div>
                     <div className="issue-desc">{i.description}</div>
@@ -344,8 +357,8 @@ const ReportProofPage: React.FC = () => {
                   <div key={`tm-${idx}`} className="issue-card severity-low">
                     <div className="issue-header">
                       <Checkbox
-                        checked={!!issueFixed['tm-' + idx]}
-                        onChange={e => setIssueFixed({ ...issueFixed, ['tm-' + idx]: e.target.checked })}
+                        checked={!!termFixed['tm-' + idx]}
+                        onChange={e => setTermFixed({ ...termFixed, ['tm-' + idx]: e.target.checked })}
                       />
                       <span className="issue-type"><Tag>低</Tag>{t.type}</span>
                       <span className="issue-field">【诊断用语】</span>

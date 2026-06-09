@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   Row, Col, Card, Tag, Button, Space, Divider, Form, Input,
   Modal, App, Tooltip, Progress, Statistic, Radio, Steps,
-  Alert, Result, List, Descriptions, Empty
+  Alert, Result, List, Descriptions, Empty, Table
 } from 'antd'
 import {
   TrophyOutlined, CheckCircleOutlined, CloseCircleOutlined,
@@ -13,13 +13,14 @@ import {
 } from '@ant-design/icons'
 import PageLayout, { openWindow, getQueryParams } from '../components/PageLayout'
 import { useAppStore, qcRules } from '../store/useAppStore'
+import type { CaseRecord, Lesion, BiopsyItem } from '../types'
 
 const QCScorePage: React.FC = () => {
   const { message, modal } = App.useApp()
   const {
-    cases, setCurrentCase, reviewScores, setScore,
-    reviewComments, setReviewComment, calculateTotalScore, submitReview,
-    disputes, addDispute, resolveDispute
+    cases, setCurrentCase, setScore,
+    setReviewComment, calculateTotalScore, submitReview,
+    addDispute, resolveDispute
   } = useAppStore()
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
   const [disputeModal, setDisputeModal] = useState(false)
@@ -34,16 +35,16 @@ const QCScorePage: React.FC = () => {
       ? caseList.find(c => c.id === id)
       : caseList.find(c => c.status === '待复核' || c.status === '复核中') || caseList[0]
     if (target) {
-      setCurrentCase(target.id)
+      setCurrentCase(target.id, false)
       setSelectedCaseId(target.id)
     }
-  }, [])
+  }, [cases.length])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 
   const currentTotal = useMemo(() => (
     case_ ? calculateTotalScore(case_.id) : 0
-  ), [case_, reviewScores])
+  ), [case_, case_?.qcScores])
 
   const scoreLevel = useMemo(() => {
     if (currentTotal >= 90) return { label: '优秀', color: '#52c41a', pct: 95 }
@@ -60,7 +61,7 @@ const QCScorePage: React.FC = () => {
       const c = cats.get(r.category)!
       c.max += r.maxScore
       const caseScore = case_
-        ? (reviewScores[case_.id]?.[r.id] ?? case_.qcScores[r.id] ?? r.maxScore)
+        ? (case_.qcScores[r.id] ?? r.maxScore)
         : r.maxScore
       c.score += caseScore
     })
@@ -70,7 +71,7 @@ const QCScorePage: React.FC = () => {
       score: v.score,
       percent: Math.round(v.score / v.max * 100)
     }))
-  }, [case_, reviewScores])
+  }, [case_, case_?.qcScores])
 
   if (!case_) {
     return (
@@ -83,8 +84,17 @@ const QCScorePage: React.FC = () => {
     )
   }
 
-  const caseDisputes = disputes[case_.id] || case_.disputes || []
-  const currentComment = (reviewComments[case_.id] || case_.reviewComment || '').trim()
+  const caseDisputes = case_.disputes || []
+  const currentComment = (case_.reviewComment || '').trim()
+
+  const manualIssues = case_.reportIssues.filter(i => i.source === '手动添加')
+  const systemIssues = case_.reportIssues.filter(i => i.source !== '手动添加')
+  const gradeList = Object.entries(case_.lesionGrades || {})
+  const bioList = Object.entries(case_.biopsyVerifications || {})
+
+  const persistStorageHint = () => {
+    message.success('当前评分、意见、校对依据均已自动保存在本机，关闭客户端后仍可恢复')
+  }
 
   const handleSubmit = (status: '已通过' | '已退回' | '争议中') => {
     if (!currentComment) {
@@ -134,14 +144,11 @@ const QCScorePage: React.FC = () => {
   const submitDispute = () => {
     disputeForm.validateFields().then(values => {
       addDispute(case_.id, {
-        id: 'D' + Date.now(),
         reviewer: '质控科张医生',
-        reason: values.reason,
-        timestamp: new Date().toISOString().slice(0, 19).replace('T', ' '),
-        status: '待处理'
+        reason: values.reason
       })
       setDisputeModal(false)
-      message.success('争议已记录')
+      message.success('争议已记录并保存')
     })
   }
 
@@ -152,14 +159,268 @@ const QCScorePage: React.FC = () => {
       subtitle={`病例 ${case_.caseNo} - ${case_.patient.name} · 按规则逐项评分、给出复核意见`}
       extra={
         <Space>
-          <Button icon={<FileTextOutlined />} onClick={() => openWindow('case-detail', { caseId: case_.id })}>
+          <Button icon={<FileTextOutlined />} onClick={() => openWindow('case-detail', { caseId: case_.id, caseNo: case_.caseNo, patientName: case_.patient.name })}>
             返回病例详情
           </Button>
-          <Button icon={<SaveOutlined />} loading={submitting}>暂存评分</Button>
+          <Button icon={<AuditOutlined />} onClick={() => openWindow('report-proof', { caseId: case_.id, caseNo: case_.caseNo, patientName: case_.patient.name })}>
+            校对依据
+          </Button>
+          <Button icon={<SaveOutlined />} onClick={() => {
+            persistStorageHint()
+          }}>保存进度</Button>
         </Space>
       }
     >
       <Row gutter={[16, 16]}>
+        <Col xs={24}>
+          <Card
+            className="info-card"
+            style={{
+              border: '2px dashed #91caff',
+              background: 'linear-gradient(135deg, #e6f4ff, #f0f5ff 40%, #fff)'
+            }}
+            title={
+              <Space size={8}>
+                <AuditOutlined style={{ color: '#1677ff', fontSize: 18 }} />
+                <b style={{ fontSize: 16 }}>前期校对依据汇总</b>
+                <Tag color="geekblue" style={{ marginLeft: 8 }}>
+                  来自：报告校对 + 诊断建议
+                </Tag>
+                <Tag color="green">自动持久化</Tag>
+              </Space>
+            }
+            extra={
+              <Space wrap size={[6, 6]}>
+                <Tag color="red">
+                  高/中危问题 {case_.reportIssues.filter(i => i.severity !== '低').length}
+                </Tag>
+                <Tag color="purple">
+                  手动问题 {manualIssues.length}
+                </Tag>
+                <Tag color="blue">
+                  病灶分级 {gradeList.filter(([, g]) => g.grade).length}/{case_.lesions.length}
+                </Tag>
+                <Tag color="cyan">
+                  活检核对 {bioList.filter(([, b]) => b.siteMatch && b.bottleMatch).length}/{case_.biopsy.length}
+                </Tag>
+                {case_.biopsyAssessment && (
+                  <Tag color={case_.biopsyAssessment.completeness >= 80 ? 'green' : 'orange'}>
+                    取材完整度 {case_.biopsyAssessment.completeness}%
+                  </Tag>
+                )}
+              </Space>
+            }
+          >
+            <Row gutter={[16, 16]}>
+              <Col xs={24} lg={8}>
+                <Card size="small" title={
+                  <Space size={6}>
+                    <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />
+                    <b>报告校对问题（{manualIssues.length + systemIssues.length}项）</b>
+                  </Space>
+                } style={{ height: '100%' }}>
+                  {case_.reportIssues.length === 0 ? (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现报告问题" />
+                  ) : (
+                    <div style={{ maxHeight: 220, overflow: 'auto' }}>
+                      <Space direction="vertical" size={[6, 6]} style={{ width: '100%' }}>
+                        {case_.reportIssues.map(i => (
+                          <div key={i.id} style={{
+                            padding: '8px 10px',
+                            borderRadius: 6,
+                            background: i.fixed ? '#f6ffed' : (i.severity === '高' ? '#fff1f0' : i.severity === '中' ? '#fff7e6' : '#fafafa'),
+                            border: i.fixed ? '1px solid #b7eb8f' : (i.severity === '高' ? '1px solid #ffa39e' : i.severity === '中' ? '1px solid #ffd591' : '1px solid #f0f0f0'),
+                            fontSize: 12
+                          }}>
+                            <Space size={[4, 4]} wrap style={{ marginBottom: 2 }}>
+                              <Tag color={i.severity === '高' ? 'red' : i.severity === '中' ? 'orange' : 'default'}
+                                style={{ margin: 0 }}>
+                                {i.severity}
+                              </Tag>
+                              <Tag color={i.source === '手动添加' ? 'purple' : 'blue'} style={{ margin: 0 }}>
+                                {i.source || '系统检测'}
+                              </Tag>
+                              {i.fixed && <Tag color="green" style={{ margin: 0 }}>已修复</Tag>}
+                              <b>{i.type}</b>
+                              <span style={{ color: '#8c8c8c' }}>【{i.field}】</span>
+                            </Space>
+                            <div style={{ color: '#595959', lineHeight: 1.6 }}>{i.description}</div>
+                            {i.suggestion && (
+                              <div style={{ color: '#1677ff', marginTop: 2, lineHeight: 1.5 }}>
+                                💡 {i.suggestion}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </Space>
+                    </div>
+                  )}
+                  {manualIssues.length > 0 && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #f0f0f0', fontSize: 12, color: '#722ed1' }}>
+                      <QuestionCircleOutlined /> 其中 {manualIssues.length} 项为质控医生在【报告校对】中手动补充，可作为扣分依据
+                    </div>
+                  )}
+                </Card>
+              </Col>
+              <Col xs={24} lg={8}>
+                <Card size="small" title={
+                  <Space size={6}>
+                    <EditOutlined style={{ color: '#722ed1' }} />
+                    <b>病灶分级摘要（{gradeList.filter(([, g]) => g.grade).length}/{case_.lesions.length}）</b>
+                  </Space>
+                } style={{ height: '100%' }}>
+                  {case_.lesions.length === 0 ? (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现病灶" />
+                  ) : (
+                    <Table
+                      size="small"
+                      pagination={false}
+                      dataSource={case_.lesions}
+                      rowKey="id"
+                      columns={[
+                        {
+                          title: '病灶', dataIndex: 'type', width: 60,
+                          render: (t: string) => <b>{t}</b>
+                        },
+                        { title: '部位', dataIndex: 'location', width: 80 },
+                        {
+                          title: '大小', width: 60,
+                          render: (_v: unknown, l: Lesion) => {
+                            const g = case_.lesionGrades?.[l.id]
+                            return g?.sizeMm ? `${g.sizeMm}mm` : l.size
+                          }
+                        },
+                        {
+                          title: '分级', width: 110,
+                          render: (_v: unknown, l: Lesion) => {
+                            const g = case_.lesionGrades?.[l.id]
+                            const grade = g?.grade
+                            return grade ? (
+                              <Tag color={grade.includes('Ⅲ') || grade.includes('进展') || grade.includes('T2') || grade.includes('重度') ? 'red' : 'blue'}>
+                                {grade}
+                              </Tag>
+                            ) : (
+                              <Tag color="default">未填写</Tag>
+                            )
+                          }
+                        },
+                        {
+                          title: '活检建议', width: 70, align: 'center',
+                          render: (_v: unknown, l: Lesion) => {
+                            const g = case_.lesionGrades?.[l.id]
+                            return g?.biopsyRecommended
+                              ? <Tag color="red">需要{g.requiredPieces ? `（≥${g.requiredPieces}块）` : ''}</Tag>
+                              : <Tag color="default">不需要</Tag>
+                          }
+                        },
+                        {
+                          title: '备注',
+                          render: (_v: unknown, l: Lesion) => {
+                            const g = case_.lesionGrades?.[l.id]
+                            return g?.remark || (l.isSuspicious ? '⚠️ AI标注疑似' : '-')
+                          }
+                        }
+                      ]}
+                    />
+                  )}
+                  {gradeList.filter(([, g]) => g.grade).length < case_.lesions.length && (
+                    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #f0f0f0', fontSize: 12, color: '#fa8c16' }}>
+                      <WarningOutlined /> 有 {case_.lesions.length - gradeList.filter(([, g]) => g.grade).length} 处病灶尚未完成分级，建议在【诊断建议】中补充，评分时参考
+                    </div>
+                  )}
+                </Card>
+              </Col>
+              <Col xs={24} lg={8}>
+                <Card size="small" title={
+                  <Space size={6}>
+                    <TrophyOutlined style={{ color: '#1677ff' }} />
+                    <b>活检核对与取材评估</b>
+                  </Space>
+                } style={{ height: '100%' }}>
+                  {case_.biopsy.length === 0 ? (
+                    <div>
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本病例无活检" />
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c', textAlign: 'center' }}>
+                        如存在可疑病变但未取活检，可作为【病变识别】维度扣分依据
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey="bottleNo"
+                        dataSource={case_.biopsy}
+                        columns={[
+                          {
+                            title: '瓶号', dataIndex: 'bottleNo', width: 60,
+                            render: (v: string) => <Tag color="purple">{v}</Tag>
+                          },
+                          { title: '部位', dataIndex: 'site', width: 80 },
+                          { title: '块数', dataIndex: 'pieces', width: 50, align: 'center' },
+                          {
+                            title: '部位匹配', width: 70, align: 'center',
+                            render: (_v: unknown, b: BiopsyItem) => {
+                              const v = case_.biopsyVerifications?.[b.bottleNo]
+                              return v?.siteMatch
+                                ? <Tag color="green">✓</Tag>
+                                : <Tag color="red">✗</Tag>
+                            }
+                          },
+                          {
+                            title: '瓶号匹配', width: 70, align: 'center',
+                            render: (_v: unknown, b: BiopsyItem) => {
+                              const v = case_.biopsyVerifications?.[b.bottleNo]
+                              return v?.bottleMatch
+                                ? <Tag color="green">✓</Tag>
+                                : <Tag color="red">✗</Tag>
+                            }
+                          }
+                        ]}
+                      />
+                      {case_.biopsyAssessment && (
+                        <>
+                          <Divider style={{ margin: '12px 0' }} />
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                              <b>取材完整度评估</b>
+                              <span>{case_.biopsyAssessment.completeness}%</span>
+                            </div>
+                            <Progress
+                              percent={case_.biopsyAssessment.completeness}
+                              size="small"
+                              status={case_.biopsyAssessment.verified
+                                ? (case_.biopsyAssessment.completeness >= 80 ? 'success' : 'active')
+                                : 'exception'}
+                            />
+                          </div>
+                          {case_.biopsyAssessment.warnings.length > 0 && (
+                            <div style={{ marginTop: 8 }}>
+                              <Alert
+                                type="warning" showIcon
+                                icon={<WarningOutlined />}
+                                message="取材警告"
+                                description={
+                                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+                                    {case_.biopsyAssessment.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                                  </ul>
+                                }
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                  <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #f0f0f0', fontSize: 12, color: '#8c8c8c', textAlign: 'center' }}>
+                    以上数据来自【诊断建议】页的保存结果，刷新或关闭客户端后仍保留
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+          </Card>
+        </Col>
+
         <Col xs={24} lg={8}>
           <Card className="info-card" style={{ marginBottom: 16 }}>
             <div className="card-header">
@@ -319,7 +580,7 @@ const QCScorePage: React.FC = () => {
             </div>
             <Row gutter={[16, 16]}>
               {qcRules.map(r => {
-                const currentScore = (reviewScores[case_.id]?.[r.id] ?? case_.qcScores[r.id] ?? r.maxScore)
+                const currentScore = (case_.qcScores[r.id] ?? r.maxScore)
                 const deduction = r.maxScore - currentScore
                 return (
                   <Col xs={24} md={12} xl={8} key={r.id}>
@@ -413,7 +674,7 @@ const QCScorePage: React.FC = () => {
                   rows={6}
                   maxLength={500}
                   showCount
-                  value={reviewComments[case_.id] ?? case_.reviewComment ?? ''}
+                  value={case_.reviewComment ?? ''}
                   onChange={e => setReviewComment(case_.id, e.target.value)}
                   placeholder="请输入复核意见：包括综合评价、存在问题、扣分理由、是否建议退回修改、后续处理建议等..."
                 />

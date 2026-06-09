@@ -210,6 +210,7 @@ function generateCase(idx: number): CaseRecord {
   const reportIssueCount = status === '待复核'
     ? (Math.random() > 0.4 ? Math.floor(Math.random() * 3) + 1 : 0)
     : Math.floor(Math.random() * 4)
+  const nowStr = new Date().toISOString()
   const reportIssues: CaseRecord['reportIssues'] = Array.from({ length: reportIssueCount }, (_, i) => {
     const type = issueTypeList[Math.floor(Math.random() * issueTypeList.length)]
     const severityPool: ('高' | '中' | '低')[] = type === '分级错误' || type === '活检瓶编号问题'
@@ -231,7 +232,10 @@ function generateCase(idx: number): CaseRecord {
       field,
       original: '原描述内容存在不规范之处',
       suggestion: '建议使用标准术语重新描述',
-      description: `${field}存在${type}问题，可能影响报告准确性`
+      description: `${field}存在${type}问题，可能影响报告准确性`,
+      source: '系统检测' as const,
+      fixed: false,
+      createdAt: nowStr
     }
   })
 
@@ -308,7 +312,32 @@ function generateCase(idx: number): CaseRecord {
       ? examDate.toISOString().slice(0, 10)
       : undefined,
     reviewer: status !== '待复核' && status !== '复核中' ? '质控科张医生' : undefined,
-    aiSuggestions: aiSugPool.sort(() => Math.random() - 0.5).slice(0, aiSuggestionCount)
+    aiSuggestions: aiSugPool.sort(() => Math.random() - 0.5).slice(0, aiSuggestionCount),
+    imageAnnotations: [],
+    lesionGrades: Object.fromEntries(
+      lesions.map(l => [l.id, {
+        lesionId: l.id,
+        grade: l.grade || '',
+        sizeMm: parseFloat(l.size) || undefined,
+        biopsyRecommended: ['肿瘤', '溃疡', '息肉'].includes(l.type),
+        requiredPieces: ['肿瘤', '溃疡'].includes(l.type) ? 4 : 2,
+        remark: ''
+      }])
+    ),
+    biopsyVerifications: Object.fromEntries(
+      biopsy.map(b => [b.bottleNo, {
+        bottleNo: b.bottleNo,
+        siteMatch: !!b.verified,
+        enoughPieces: true,
+        bottleMatch: !!b.verified
+      }])
+    ),
+    biopsyAssessment: {
+      completeness: 100,
+      warnings: [],
+      verified: true
+    },
+    lastModified: new Date().toISOString()
   }
 }
 

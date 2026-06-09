@@ -69,6 +69,9 @@ export interface ReportIssue {
   original: string
   suggestion: string
   description: string
+  source?: '系统检测' | '手动添加'
+  fixed?: boolean
+  createdAt?: string
 }
 
 export interface QCRule {
@@ -90,6 +93,41 @@ export interface DisputeRecord {
   timestamp: string
   status: '待处理' | '已解决' | '升级处理'
   resolution?: string
+}
+
+export interface ImageAnnotation {
+  id: string
+  frameId: string
+  x: number
+  y: number
+  r: number
+  type: LesionType
+  label: string
+  note?: string
+  createdAt: string
+}
+
+export interface LesionGradeRecord {
+  lesionId: string
+  grade: string
+  sizeMm?: number
+  biopsyRecommended?: boolean
+  requiredPieces?: number
+  marginClear?: boolean
+  remark?: string
+}
+
+export interface BiopsyVerification {
+  bottleNo: string
+  siteMatch: boolean
+  enoughPieces?: boolean
+  bottleMatch: boolean
+}
+
+export interface BiopsyAssessment {
+  completeness: number
+  warnings: string[]
+  verified: boolean
 }
 
 export interface CaseRecord {
@@ -119,6 +157,11 @@ export interface CaseRecord {
   reviewDate?: string
   reviewer?: string
   aiSuggestions?: string[]
+  imageAnnotations: ImageAnnotation[]
+  lesionGrades: Record<string, LesionGradeRecord>
+  biopsyVerifications: Record<string, BiopsyVerification>
+  biopsyAssessment?: BiopsyAssessment
+  lastModified: string
 }
 
 export interface DoctorStats {
@@ -144,3 +187,9 @@ export interface MonthlySummary {
   commonProblems: { problem: string; count: number; rate: number }[]
   doctorRankings: { doctorName: string; cases: number; avgScore: number; passRate: number }[]
 }
+
+export type BroadcastEvent =
+  | { type: 'CASE_CHANGED'; caseId: string }
+  | { type: 'CASE_UPDATED'; caseId: string }
+  | { type: 'DATA_REFRESHED' }
+  | { type: 'PING' }

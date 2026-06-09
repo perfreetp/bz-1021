@@ -22,7 +22,7 @@ type BiopsyRequirement = {
 
 const DiagnosisPage: React.FC = () => {
   const { message } = App.useApp()
-  const { cases, setCurrentCase } = useAppStore()
+  const { cases, setCurrentCase, setLesionGrade, setBiopsyVerification, setBiopsyAssessment, getCurrentCase } = useAppStore()
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
   const [lesionGrades, setLesionGrades] = useState<Record<string, {
     grade: string; size?: number; parisType?: PolypGrade; inflLevel?: InflammationGrade; ulcerStage?: UlcerStage; marginClear?: boolean; biopsyRecommended?: BiopsyRequirement
@@ -40,23 +40,41 @@ const DiagnosisPage: React.FC = () => {
       ? caseList.find(c => c.id === id)
       : caseList.find(c => c.lesions.length > 0) || caseList[0]
     if (target) {
-      setCurrentCase(target.id)
+      setCurrentCase(target.id, false)
       setSelectedCaseId(target.id)
       const initGrades: Record<string, any> = {}
       target.lesions.forEach(l => {
-        initGrades[l.id] = { grade: l.grade || '' }
-        if (l.type === '息肉') initGrades[l.id].parisType = (l.grade as PolypGrade) || 'Ⅰ型'
-        if (l.type === '炎症') initGrades[l.id].inflLevel = (l.grade as InflammationGrade) || '轻度'
-        if (l.type === '溃疡') initGrades[l.id].ulcerStage = (l.grade as UlcerStage) || '活动期(A1/A2)'
+        const persisted = target.lesionGrades?.[l.id]
+        if (persisted) {
+          initGrades[l.id] = {
+            grade: persisted.grade,
+            size: persisted.sizeMm,
+            biopsyRecommended: persisted.biopsyRecommended !== undefined
+              ? {
+                  needBiopsy: persisted.biopsyRecommended,
+                  requiredPieces: persisted.requiredPieces || 2,
+                  reason: persisted.remark || ''
+                }
+              : undefined
+          }
+        } else {
+          initGrades[l.id] = { grade: l.grade || '' }
+        }
+        if (l.type === '息肉' && !initGrades[l.id].grade) initGrades[l.id].parisType = 'Ⅰ型'
+        if (l.type === '炎症' && !initGrades[l.id].grade) initGrades[l.id].inflLevel = '轻度'
+        if (l.type === '溃疡' && !initGrades[l.id].grade) initGrades[l.id].ulcerStage = '活动期(A1/A2)'
       })
       setLesionGrades(initGrades)
       const initBio: Record<string, any> = {}
       target.biopsy.forEach(b => {
-        initBio[b.bottleNo] = { siteMatch: !!b.verified, enoughPieces: true, bottleMatch: !!b.verified, description: '' }
+        const persisted = target.biopsyVerifications?.[b.bottleNo]
+        initBio[b.bottleNo] = persisted
+          ? { ...persisted, description: '' }
+          : { siteMatch: !!b.verified, enoughPieces: true, bottleMatch: !!b.verified, description: '' }
       })
       setBiopsyChecks(initBio)
     }
-  }, [])
+  }, [cases.length])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 
@@ -142,7 +160,41 @@ const DiagnosisPage: React.FC = () => {
   }
 
   const saveAll = () => {
-    message.success(`病例 ${case_.caseNo} 诊断分级与取材评估已保存`)
+    if (!case_) return
+    case_.lesions.forEach(l => {
+      const g = lesionGrades[l.id]
+      if (g) {
+        setLesionGrade(case_.id, l.id, {
+          lesionId: l.id,
+          grade: g.grade || '',
+          sizeMm: g.size,
+          biopsyRecommended: g.biopsyRecommended?.needBiopsy,
+          requiredPieces: g.biopsyRecommended?.requiredPieces,
+          remark: g.biopsyRecommended?.reason
+        })
+      }
+    })
+    case_.biopsy.forEach(b => {
+      const c = biopsyChecks[b.bottleNo]
+      if (c) {
+        setBiopsyVerification(case_.id, b.bottleNo, {
+          bottleNo: b.bottleNo,
+          siteMatch: c.siteMatch,
+          bottleMatch: c.bottleMatch,
+          enoughPieces: c.enoughPieces
+        })
+      }
+    })
+    const completeness = Math.min(100, Math.round(
+      ((biopsyAnalysis.done / Math.max(1, biopsyAnalysis.total)) * 50 +
+        (Math.min(1, (biopsyAnalysis.taken ?? 0) / Math.max(1, biopsyAnalysis.needed))) * 50)
+    ))
+    setBiopsyAssessment(case_.id, {
+      completeness,
+      warnings: biopsyAnalysis.warning,
+      verified: Object.values(biopsyChecks).every(b => b.siteMatch && b.bottleMatch)
+    })
+    message.success(`病例 ${case_.caseNo} 诊断分级与取材评估已保存并持久化`)
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
   }
@@ -171,7 +223,7 @@ const DiagnosisPage: React.FC = () => {
         <Space>
           {saved && <Tag icon={<CheckCircleOutlined />} color="green">已保存</Tag>}
           <Button icon={<SaveOutlined />} onClick={saveAll}>保存评估</Button>
-          <Button type="primary" icon={<TrophyOutlined />} onClick={() => openWindow('qc-score', { caseId: case_.id })}>
+          <Button type="primary" icon={<TrophyOutlined />} onClick={() => openWindow('qc-score', { caseId: case_.id, caseNo: case_.caseNo, patientName: case_.patient.name })}>
             前往质控评分
           </Button>
         </Space>

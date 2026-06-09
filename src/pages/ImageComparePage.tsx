@@ -1,16 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
   Row, Col, Card, Select, Space, Button, List, Tag, Tooltip, Modal,
-  Slider, Input, InputNumber, Radio, Divider, App, Drawer, Badge, Form, message as antMessage
+  Slider, Input, InputNumber, Radio, Divider, App, Drawer, Badge, Form
 } from 'antd'
 import {
-  PictureOutlined, PlusOutlined, DeleteOutlined, EditOutlined,
+  PictureOutlined, PlusOutlined, DeleteOutlined,
   BulbOutlined, LeftOutlined, RightOutlined, SearchOutlined,
   CheckCircleOutlined, ExclamationCircleOutlined, CloseCircleOutlined
 } from '@ant-design/icons'
 import PageLayout, { getQueryParams, openWindow } from '../components/PageLayout'
 import { useAppStore } from '../store/useAppStore'
-import type { LesionType, CaseRecord, HistoryExam } from '../types'
+import type { LesionType, CaseRecord, ImageAnnotation } from '../types'
 
 const lesionTypeColors: Record<LesionType, string> = {
   '息肉': '#1677ff',
@@ -21,20 +21,9 @@ const lesionTypeColors: Record<LesionType, string> = {
   '其他': '#8c8c8c'
 }
 
-type Marker = {
-  id: string
-  x: number
-  y: number
-  r: number
-  type: LesionType
-  label: string
-  note?: string
-  confirmed?: boolean
-}
-
 const ImageComparePage: React.FC = () => {
   const { message, modal } = App.useApp()
-  const { cases, markedAnnotations, addAnnotation, removeAnnotation, getCurrentCase, setCurrentCase } = useAppStore()
+  const { cases, addAnnotation, removeAnnotation, setCurrentCase } = useAppStore()
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
   const [leftHistoryId, setLeftHistoryId] = useState<string | 'current'>('current')
   const [rightHistoryId, setRightHistoryId] = useState<string | 'current'>('current')
@@ -44,6 +33,7 @@ const ImageComparePage: React.FC = () => {
   const [zoomRight, setZoomRight] = useState(100)
   const [markerDrawerOpen, setMarkerDrawerOpen] = useState(false)
   const [markerSide, setMarkerSide] = useState<'left' | 'right'>('left')
+  const [searchText, setSearchText] = useState('')
   const [form] = Form.useForm<{ type: LesionType; label: string; note: string }>()
 
   const leftImgRef = useRef<HTMLDivElement>(null)
@@ -58,10 +48,10 @@ const ImageComparePage: React.FC = () => {
       ? caseList.find(c => c.id === id)
       : caseList.find(c => c.keyFrames.length > 0) || caseList[0]
     if (target) {
-      setCurrentCase(target.id)
+      setCurrentCase(target.id, false)
       setSelectedCaseId(target.id)
     }
-  }, [])
+  }, [cases.length])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 
@@ -90,6 +80,9 @@ const ImageComparePage: React.FC = () => {
   const leftImg = leftItems[leftImgIdx]
   const rightImg = rightItems[rightImgIdx]
 
+  const getFrameAnnotations = (frameId?: string) =>
+    case_?.imageAnnotations.filter(a => a.frameId === frameId) || []
+
   const handleImageClick = (side: 'left' | 'right', e: React.MouseEvent<HTMLDivElement>) => {
     const target = (side === 'left' ? leftImgRef : rightImgRef).current
     if (!target) return
@@ -107,50 +100,81 @@ const ImageComparePage: React.FC = () => {
   }
 
   const confirmMarker = () => {
-    if (!pendingPos) return
+    if (!pendingPos || !case_) return
     const values = form.getFieldsValue()
     const side = markerSide
     const frameId = side === 'left'
       ? (leftImg?.id || '')
       : (rightImg?.id || '')
     if (!frameId) return
-    addAnnotation(frameId, {
+    addAnnotation(case_.id, {
+      frameId,
       x: pendingPos.x,
       y: pendingPos.y,
       r: 8,
       type: values.type,
-      label: values.label
+      label: values.label,
+      note: values.note
     })
-    message.success(`已在${side === 'left' ? '左' : '右'}图添加${values.type}标注`)
+    message.success(`已在${side === 'left' ? '左' : '右'}图添加${values.type}标注并保存`)
     setMarkerDrawerOpen(false)
     setPendingPos(null)
   }
 
-  const historyOpts = [
+  const historyOpts: { value: string; label: string }[] = [
     { value: 'current', label: `本次 ${case_.examType}（${case_.examDate}） - ${case_.keyFrames.length} 帧` }
   ]
   case_.historyExams.forEach(h => {
     historyOpts.push({ value: h.id, label: `历史 ${h.type}（${h.date}） - ${h.imageUrls.length} 帧 · ${h.diagnosis.slice(0, 18)}` })
   })
 
-  const lesionSummary = [
-    ...case_.lesions.map(l => ({ ...l, source: '本次检查标注' as const, color: lesionTypeColors[l.type] })),
-    ...Object.entries(markedAnnotations)
-      .filter(([id]) => case_.keyFrames.some(kf => kf.id === id))
-      .flatMap(([id, anns]) => anns.map((a, idx) => ({
-        id: `ann-${id}-${idx}`,
-        type: a.type as LesionType,
-        location: '标注于 ' + (case_.keyFrames.find(kf => kf.id === id)?.description || id),
-        size: '-',
-        description: a.label,
-        grade: undefined,
-        isSuspicious: false,
-        source: '手动标注' as const,
-        color: lesionTypeColors[a.type as LesionType]
-      })))
-  ]
+  type LesionSummaryItem = {
+    id: string
+    type: LesionType
+    location: string
+    size: string
+    description: string
+    grade?: string
+    isSuspicious: boolean
+    source: '系统' | '手动标注'
+    color: string
+    frameId?: string
+    annotation?: ImageAnnotation
+  }
 
-  const suspiciousItems = lesionSummary.filter((l: any) => l.isSuspicious || l.type === '溃疡' || l.type === '肿瘤')
+  const manualAnnotations = case_.imageAnnotations
+    .map(ann => {
+      const kf = case_.keyFrames.find(k => k.id === ann.frameId)
+      return {
+        id: ann.id,
+        type: ann.type as LesionType,
+        location: '标注于 ' + (kf?.description || ann.frameId),
+        size: ann.note ? `备注: ${ann.note.slice(0, 30)}` : '-',
+        description: ann.label,
+        grade: undefined,
+        isSuspicious: ann.type === '溃疡' || ann.type === '肿瘤',
+        source: '手动标注' as const,
+        color: lesionTypeColors[ann.type as LesionType],
+        frameId: ann.frameId,
+        annotation: ann
+      } as LesionSummaryItem
+    })
+
+  const systemLesions = case_.lesions.map(l => ({
+    ...l,
+    source: '系统' as const,
+    color: lesionTypeColors[l.type],
+    isSuspicious: l.isSuspicious || l.type === '溃疡' || l.type === '肿瘤',
+    description: l.description,
+    size: l.size,
+    location: l.location,
+    grade: l.grade
+  } as LesionSummaryItem))
+
+  const lesionSummary = [...systemLesions, ...manualAnnotations].filter(
+    l => !searchText || l.description.includes(searchText) || l.location.includes(searchText)
+  )
+  const suspiciousItems = lesionSummary.filter(l => l.isSuspicious)
 
   const switchSide = () => {
     setLeftHistoryId(rightHistoryId)
@@ -160,11 +184,41 @@ const ImageComparePage: React.FC = () => {
     setRightImgIdx(t)
   }
 
+  const renderMarkers = (imgId?: string) => {
+    const anns = getFrameAnnotations(imgId)
+    return anns.map((m, idx) => (
+      <div
+        key={m.id}
+        className="canvas-marker"
+        style={{
+          left: `${m.x}%`,
+          top: `${m.y}%`,
+          width: `${m.r * 2}%`,
+          height: `${m.r * 2}%`,
+          borderColor: lesionTypeColors[m.type as LesionType],
+          background: `${lesionTypeColors[m.type as LesionType]}22`
+        }}
+        title={`${m.type}: ${m.label}${m.note ? ' - ' + m.note : ''}（点击下方列表可删除）`}
+      >
+        <span style={{
+          background: lesionTypeColors[m.type as LesionType],
+          color: '#fff',
+          padding: '1px 5px',
+          borderRadius: 3,
+          whiteSpace: 'nowrap',
+          fontSize: 11,
+          fontWeight: 600
+        }}>
+          {idx + 1}
+        </span>
+      </div>
+    ))
+  }
+
   return (
     <PageLayout
       title="图像对比"
       currentKey="image-compare"
-      subtitle={`病例 ${case_.caseNo} - ${case_.patient.name} · 并排对比历史影像，辅助病灶识别与标注`}
       extra={
         <Space>
           <Button onClick={switchSide} icon={<SwapIcon />}>左右互换</Button>
@@ -196,6 +250,9 @@ const ImageComparePage: React.FC = () => {
                     <Tag style={{ marginLeft: 6 }} color="blue">
                       {leftImgIdx + 1} / {leftItems.length}
                     </Tag>
+                    {getFrameAnnotations(leftImg?.id).length > 0 && (
+                      <Tag color="red">标注 {getFrameAnnotations(leftImg?.id).length}</Tag>
+                    )}
                   </h4>
                 </Space>
                 <Space>
@@ -223,25 +280,7 @@ const ImageComparePage: React.FC = () => {
                     draggable={false}
                   />
                 )}
-                {(markedAnnotations[leftImg?.id || ''] || []).map((m, idx) => (
-                  <div
-                    key={idx}
-                    className="canvas-marker"
-                    style={{
-                      left: `${m.x}%`,
-                      top: `${m.y}%`,
-                      width: `${m.r * 2}%`,
-                      height: `${m.r * 2}%`,
-                      borderColor: lesionTypeColors[m.type as LesionType],
-                      background: `${lesionTypeColors[m.type as LesionType]}22`
-                    }}
-                    title={`${m.type}: ${m.label}`}
-                  >
-                    <span style={{ background: lesionTypeColors[m.type as LesionType], padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap' }}>
-                      {idx + 1}
-                    </span>
-                  </div>
-                ))}
+                {renderMarkers(leftImg?.id)}
                 {leftImg?.marked && (
                   <Badge.Ribbon text="AI 检测异常" color="red" style={{ position: 'absolute', top: 8, right: 8 }} />
                 )}
@@ -257,14 +296,26 @@ const ImageComparePage: React.FC = () => {
                 </div>
                 <div className="kf-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))' }}>
                   {leftItems.map((it, i) => (
-                    <Tooltip key={it.id} title={it.label}>
+                    <Tooltip key={it.id} title={it.label + (getFrameAnnotations(it.id).length ? `（${getFrameAnnotations(it.id).length}处标注）` : '')}>
                       <div
                         className={`kf-item ${i === leftImgIdx ? 'selected' : ''}`}
-                        style={{ aspectRatio: 'auto', height: 54 }}
+                        style={{ aspectRatio: 'auto', height: 54, position: 'relative' }}
                         onClick={() => setLeftImgIdx(i)}
                       >
                         <img src={it.image} alt="" />
                         {it.marked && <span className="kf-badge">!</span>}
+                        {getFrameAnnotations(it.id).length > 0 && (
+                          <span style={{
+                            position: 'absolute',
+                            bottom: 2,
+                            right: 2,
+                            background: '#ff4d4f',
+                            color: '#fff',
+                            borderRadius: 3,
+                            fontSize: 10,
+                            padding: '0 4px'
+                          }}>{getFrameAnnotations(it.id).length}</span>
+                        )}
                       </div>
                     </Tooltip>
                   ))}
@@ -287,6 +338,9 @@ const ImageComparePage: React.FC = () => {
                     <Tag style={{ marginLeft: 6 }} color="purple">
                       {rightImgIdx + 1} / {rightItems.length}
                     </Tag>
+                    {getFrameAnnotations(rightImg?.id).length > 0 && (
+                      <Tag color="red">标注 {getFrameAnnotations(rightImg?.id).length}</Tag>
+                    )}
                   </h4>
                 </Space>
                 <Space>
@@ -314,25 +368,7 @@ const ImageComparePage: React.FC = () => {
                     draggable={false}
                   />
                 )}
-                {(markedAnnotations[rightImg?.id || ''] || []).map((m, idx) => (
-                  <div
-                    key={idx}
-                    className="canvas-marker"
-                    style={{
-                      left: `${m.x}%`,
-                      top: `${m.y}%`,
-                      width: `${m.r * 2}%`,
-                      height: `${m.r * 2}%`,
-                      borderColor: lesionTypeColors[m.type as LesionType],
-                      background: `${lesionTypeColors[m.type as LesionType]}22`
-                    }}
-                    title={`${m.type}: ${m.label}`}
-                  >
-                    <span style={{ background: lesionTypeColors[m.type as LesionType], padding: '1px 4px', borderRadius: 3, whiteSpace: 'nowrap' }}>
-                      {idx + 1}
-                    </span>
-                  </div>
-                ))}
+                {renderMarkers(rightImg?.id)}
                 {rightImg?.marked && (
                   <Badge.Ribbon text="AI 检测异常" color="red" style={{ position: 'absolute', top: 8, right: 8 }} />
                 )}
@@ -348,14 +384,26 @@ const ImageComparePage: React.FC = () => {
                 </div>
                 <div className="kf-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))' }}>
                   {rightItems.map((it, i) => (
-                    <Tooltip key={it.id} title={it.label}>
+                    <Tooltip key={it.id} title={it.label + (getFrameAnnotations(it.id).length ? `（${getFrameAnnotations(it.id).length}处标注）` : '')}>
                       <div
                         className={`kf-item ${i === rightImgIdx ? 'selected' : ''}`}
-                        style={{ aspectRatio: 'auto', height: 54 }}
+                        style={{ aspectRatio: 'auto', height: 54, position: 'relative' }}
                         onClick={() => setRightImgIdx(i)}
                       >
                         <img src={it.image} alt="" />
                         {it.marked && <span className="kf-badge">!</span>}
+                        {getFrameAnnotations(it.id).length > 0 && (
+                          <span style={{
+                            position: 'absolute',
+                            bottom: 2,
+                            right: 2,
+                            background: '#722ed1',
+                            color: '#fff',
+                            borderRadius: 3,
+                            fontSize: 10,
+                            padding: '0 4px'
+                          }}>{getFrameAnnotations(it.id).length}</span>
+                        )}
                       </div>
                     </Tooltip>
                   ))}
@@ -371,13 +419,19 @@ const ImageComparePage: React.FC = () => {
               <h3><BulbOutlined /> 病灶汇总 / 标注列表
                 <Tag color="red" style={{ marginLeft: 8 }}>疑似 {suspiciousItems.length}</Tag>
                 <Tag color="blue" style={{ marginLeft: 4 }}>共 {lesionSummary.length}</Tag>
+                {manualAnnotations.length > 0 && (
+                  <Tag color="cyan" style={{ marginLeft: 4 }}>手动 {manualAnnotations.length}</Tag>
+                )}
               </h3>
               <Space>
-                <Input.Search
+                <Input
                   placeholder="搜索病灶描述..."
                   prefix={<SearchOutlined />}
                   size="small"
                   style={{ width: 220 }}
+                  value={searchText}
+                  onChange={e => setSearchText(e.target.value)}
+                  allowClear
                 />
                 <Button size="small" icon={<PlusOutlined />} type="primary" onClick={() => {
                   setMarkerSide('left')
@@ -391,21 +445,36 @@ const ImageComparePage: React.FC = () => {
             <List
               size="small"
               dataSource={lesionSummary as any[]}
-              renderItem={(item: any, i) => (
+              locale={{ emptyText: '暂无病灶与标注' }}
+              renderItem={(item: LesionSummaryItem, i) => (
                 <List.Item
                   key={item.id}
                   actions={[
-                    <Tooltip key="loc" title="定位到图">
-                      <Button size="small" type="link" icon={<PictureOutlined />} />
+                    <Tooltip key="loc" title="定位到关键帧">
+                      <Button size="small" type="link" icon={<PictureOutlined />}
+                        onClick={() => {
+                          const kfId = item.frameId || case_.keyFrames[0]?.id
+                          if (!kfId) return
+                          const li = leftItems.findIndex(x => x.id === kfId)
+                          if (li >= 0) { setLeftHistoryId('current'); setLeftImgIdx(li); message.info('已在左栏定位') }
+                        }} />
                     </Tooltip>,
-                    'source' in item && item.source === '手动标注' ? (
-                      <Tooltip key="del" title="删除标注">
+                    item.source === '手动标注' ? (
+                      <Tooltip key="del" title="永久删除此标注（刷新后也不再出现）">
                         <Button size="small" type="link" danger icon={<DeleteOutlined />}
                           onClick={() => {
                             modal.confirm({
-                              title: '删除标注',
-                              content: '确定要删除此标注吗？',
-                              onOk: () => message.success('已删除')
+                              title: '确认删除标注？',
+                              content: `${item.type}：${item.description}\n删除后将从当前视图、病灶汇总列表和本地存储中彻底移除，无法恢复。`,
+                              okText: '永久删除',
+                              okButtonProps: { danger: true },
+                              cancelText: '取消',
+                              onOk: () => {
+                                if (case_ && item.annotation) {
+                                  removeAnnotation(case_.id, item.annotation.id)
+                                  message.success('标注已永久删除，并已保存到本地存储')
+                                }
+                              }
                             })
                           }} />
                       </Tooltip>
@@ -427,13 +496,15 @@ const ImageComparePage: React.FC = () => {
                       />
                     }
                     title={
-                      <Space>
+                      <Space wrap>
                         <span className={`lesion-tag type-${item.type === '息肉' ? 'polyp' : item.type === '炎症' ? 'inflammation' : item.type === '溃疡' ? 'ulcer' : item.type === '肿瘤' ? 'tumor' : item.type === '血管畸形' ? 'vascular' : 'other'}`}>
                           {item.type}
                         </span>
                         {item.grade && <Tag color="purple">{item.grade}</Tag>}
                         {item.isSuspicious && <Tag color="red" icon={<ExclamationCircleOutlined />}>疑似</Tag>}
-                        {'source' in item && <Tag color={item.source === '手动标注' ? 'blue' : 'geekblue'}>{item.source}</Tag>}
+                        <Tag color={item.source === '手动标注' ? 'cyan' : 'geekblue'}>
+                          {item.source}
+                        </Tag>
                       </Space>
                     }
                     description={
@@ -478,6 +549,7 @@ const ImageComparePage: React.FC = () => {
               <div>• 点击图像任意位置可添加新标注</div>
               <div>• 可在左右窗口选择不同时间点的影像进行对比</div>
               <div>• 拖动缩放滑块可放大观察细节</div>
+              <div>• 删除标注会从列表、图上和本地存储中彻底移除</div>
               <div>• 红色丝带标记为 AI 检测出的疑似异常区域</div>
             </div>
           </Card>
@@ -512,7 +584,7 @@ const ImageComparePage: React.FC = () => {
         extra={
           <Space>
             <Button onClick={() => setMarkerDrawerOpen(false)}>取消</Button>
-            <Button type="primary" onClick={confirmMarker} icon={<CheckCircleOutlined />}>确定添加</Button>
+            <Button type="primary" onClick={confirmMarker} icon={<CheckCircleOutlined />}>确定添加并保存</Button>
           </Space>
         }
       >
@@ -530,7 +602,7 @@ const ImageComparePage: React.FC = () => {
             <Input placeholder="如：胃窦后壁息肉" />
           </Form.Item>
           <Form.Item label="备注说明" name="note">
-            <Input.TextArea rows={4} placeholder="可补充大小、形态、NBI/染色特征等..." />
+            <Input.TextArea rows={4} placeholder="可补充大小、形态、NBI/染色特征等，备注会与标注一起持久化保存" />
           </Form.Item>
           <Divider />
           <div style={{ fontSize: 12, color: '#8c8c8c', lineHeight: 1.7 }}>
@@ -539,7 +611,9 @@ const ImageComparePage: React.FC = () => {
                 标注位置：X ≈ {pendingPos.x.toFixed(1)}%, Y ≈ {pendingPos.y.toFixed(1)}%
               </div>
             )}
-            标注后可在病灶汇总中查看。
+            <div style={{ marginTop: 4, color: '#52c41a' }}>
+              ✓ 标注将自动写入病例并保存在本地，关闭客户端后仍保留
+            </div>
           </div>
         </Form>
       </Drawer>

@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import { Space, Button, Tooltip, App } from 'antd'
 import {
   UnorderedListOutlined,
@@ -11,6 +11,7 @@ import {
   ReloadOutlined
 } from '@ant-design/icons'
 import type { PropsWithChildren } from 'react'
+import { useAppStore } from '../store/useAppStore'
 import './PageLayout.less'
 
 const windowNavItems = [
@@ -30,6 +31,7 @@ declare global {
       closeWindow: (name: string) => Promise<boolean>
       getOpenWindows: () => Promise<string[]>
       showExportDialog: () => Promise<{ filePath?: string; canceled: boolean }>
+      onSwitchCase?: (cb: (q: Record<string, string>) => void) => () => void
     }
   }
 }
@@ -61,24 +63,51 @@ interface PageLayoutProps extends PropsWithChildren {
 
 const PageLayout: React.FC<PageLayoutProps> = ({ title, currentKey, subtitle, extra, children }) => {
   const { message } = App.useApp()
+  const { currentCaseId, setCurrentCase, cases } = useAppStore()
+
+  useEffect(() => {
+    const params = getQueryParams()
+    if (params.caseId && (!currentCaseId || currentCaseId !== params.caseId)) {
+      setCurrentCase(params.caseId, false)
+    }
+    if (window.electronAPI?.onSwitchCase) {
+      const off = window.electronAPI.onSwitchCase((q) => {
+        if (q?.caseId && q.caseId !== useAppStore.getState().currentCaseId) {
+          useAppStore.getState().setCurrentCase(q.caseId, true)
+        }
+      })
+      return off
+    }
+  }, [])
 
   const handleNavClick = async (key: string) => {
     if (key === currentKey) return
     const params = getQueryParams()
+    const state = useAppStore.getState()
+    const case_ = state.currentCaseId ? state.cases.find(c => c.id === state.currentCaseId) : undefined
     const query: Record<string, string> = {}
-    if (params.caseId) query.caseId = params.caseId
+    if (params.caseId || case_) {
+      const cid = params.caseId || case_?.id!
+      query.caseId = cid
+      if (case_) { query.caseNo = case_.caseNo; query.patientName = case_.patient.name }
+    }
     await openWindow(key, Object.keys(query).length ? query : undefined)
     message.info(`已打开【${windowNavItems.find(i => i.key === key)?.label}】窗口`)
   }
 
   const handleRefresh = () => window.location.reload()
 
+  const currentCase = currentCaseId ? cases.find(c => c.id === currentCaseId) : undefined
+  const displaySubtitle = (currentCase && currentKey !== 'pending-list' && currentKey !== 'statistics')
+    ? `${currentCase.caseNo} · ${currentCase.patient.name} · ${currentCase.patient.gender} ${currentCase.patient.age}岁${subtitle ? ' | ' + subtitle : ''}`
+    : subtitle
+
   return (
     <div className="page-layout">
       <header className="page-header">
         <div className="page-header-left">
           <h1 className="page-title">{title}</h1>
-          {subtitle && <div className="page-subtitle">{subtitle}</div>}
+          {displaySubtitle && <div className="page-subtitle">{displaySubtitle}</div>}
         </div>
         <div className="page-header-right">
           {extra}

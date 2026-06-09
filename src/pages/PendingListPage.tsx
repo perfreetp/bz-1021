@@ -84,7 +84,11 @@ const PendingListPage: React.FC = () => {
   const openCase = async (case_: CaseRecord, subPage?: string) => {
     setCurrentCase(case_.id)
     const winName = subPage || 'case-detail'
-    await openWindow(winName, { caseId: case_.id })
+    await openWindow(winName, {
+      caseId: case_.id,
+      caseNo: case_.caseNo,
+      patientName: case_.patient.name
+    })
     const subPageName = subPage === 'image-compare'
       ? '图像对比'
       : subPage === 'diagnosis'
