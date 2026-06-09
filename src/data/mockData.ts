@@ -343,9 +343,9 @@ function generateCase(idx: number): CaseRecord {
 
 export const caseRecords: CaseRecord[] = Array.from({ length: 50 }, (_, i) => generateCase(i + 1))
 
-export function buildDoctorStats(): DoctorStats[] {
+export function buildDoctorStats(cases: CaseRecord[] = caseRecords): DoctorStats[] {
   return doctors.map(d => {
-    const doctorCases = caseRecords.filter(c => c.doctor.id === d.id)
+    const doctorCases = cases.filter(c => c.doctor.id === d.id)
     const totalCases = doctorCases.length
     const passedCases = doctorCases.filter(c => c.status === '已通过').length
     const returnedCases = doctorCases.filter(c => c.status === '已退回').length
@@ -396,13 +396,13 @@ export function buildDoctorStats(): DoctorStats[] {
   })
 }
 
-export function buildMonthlySummary(monthsBack: number = 6): MonthlySummary[] {
+export function buildMonthlySummary(monthsBack: number = 6, cases: CaseRecord[] = caseRecords): MonthlySummary[] {
   const result: MonthlySummary[] = []
   for (let m = monthsBack - 1; m >= 0; m--) {
     const d = new Date()
     d.setMonth(d.getMonth() - m)
     const monthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    const monthCases = caseRecords.filter(c => c.examDate.startsWith(monthStr))
+    const monthCases = cases.filter(c => c.examDate.startsWith(monthStr))
     const totalCases = monthCases.length
     const reviewedCases = monthCases.filter(c => c.status !== '待复核' && c.status !== '复核中').length
     const passedCases = monthCases.filter(c => c.status === '已通过').length

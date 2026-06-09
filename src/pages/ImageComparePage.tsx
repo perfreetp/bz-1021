@@ -23,7 +23,7 @@ const lesionTypeColors: Record<LesionType, string> = {
 
 const ImageComparePage: React.FC = () => {
   const { message, modal } = App.useApp()
-  const { cases, addAnnotation, removeAnnotation, setCurrentCase } = useAppStore()
+  const { cases, addAnnotation, removeAnnotation, setCurrentCase, currentCaseId } = useAppStore()
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
   const [leftHistoryId, setLeftHistoryId] = useState<string | 'current'>('current')
   const [rightHistoryId, setRightHistoryId] = useState<string | 'current'>('current')
@@ -42,7 +42,7 @@ const ImageComparePage: React.FC = () => {
 
   useEffect(() => {
     const params = getQueryParams()
-    const id = params.caseId
+    const id = params.caseId || currentCaseId
     const caseList = cases
     const target = id
       ? caseList.find(c => c.id === id)
@@ -51,7 +51,7 @@ const ImageComparePage: React.FC = () => {
       setCurrentCase(target.id, false)
       setSelectedCaseId(target.id)
     }
-  }, [cases.length])
+  }, [cases.length, currentCaseId])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 

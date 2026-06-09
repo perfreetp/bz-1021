@@ -44,7 +44,7 @@ const nonStandardTerms: { wrong: string; correct: string; note: string }[] = [
 const ReportProofPage: React.FC = () => {
   const { message, modal } = App.useApp()
   const {
-    cases, setCurrentCase, addReportIssue, removeReportIssue, toggleIssueFixed, setBiopsyVerification
+    cases, setCurrentCase, addReportIssue, removeReportIssue, toggleIssueFixed, setBiopsyVerification, currentCaseId
   } = useAppStore()
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
   const [addIssueModal, setAddIssueModal] = useState(false)
@@ -55,7 +55,7 @@ const ReportProofPage: React.FC = () => {
 
   useEffect(() => {
     const params = getQueryParams()
-    const id = params.caseId
+    const id = params.caseId || currentCaseId
     const caseList = cases
     const target = id
       ? caseList.find(c => c.id === id)
@@ -70,7 +70,7 @@ const ReportProofPage: React.FC = () => {
       })
       setBiopsyVerified(initBio)
     }
-  }, [cases.length])
+  }, [cases.length, currentCaseId])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 

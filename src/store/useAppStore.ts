@@ -157,8 +157,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedKeyFrames: new Set(),
   _hydrated: true,
   _lastBroadcastTs: 0,
-  doctorStats: buildDoctorStats(),
-  monthlySummary: buildMonthlySummary(6),
+  doctorStats: buildDoctorStats(initialStateCases),
+  monthlySummary: buildMonthlySummary(6, initialStateCases),
 
   setFilters: (f) => set(state => ({ filters: { ...state.filters, ...f } })),
   resetFilters: () => set({ filters: {} }),
@@ -343,14 +343,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   refreshDerived: () => {
     const { cases } = get()
-    const statsFn = new Function('cases', `return (${buildDoctorStats.toString()})(cases)`)
-    const monthlyFn = new Function('cases', `return (${buildMonthlySummary.toString()})(6)`)
-    try {
-      set({
-        doctorStats: buildDoctorStatsCustom(cases),
-        monthlySummary: buildMonthlySummaryCustom(cases)
-      })
-    } catch {}
+    set({
+      doctorStats: buildDoctorStats(cases),
+      monthlySummary: buildMonthlySummary(6, cases)
+    })
   },
 
   hydrateFromStorage: () => {
@@ -361,123 +357,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().refreshDerived()
   }
 }))
-
-function buildDoctorStatsCustom(cases: CaseRecord[]): DoctorStats[] {
-  return doctors.map(d => {
-    const doctorCases = cases.filter(c => c.doctor.id === d.id)
-    const totalCases = doctorCases.length
-    const passedCases = doctorCases.filter(c => c.status === '已通过').length
-    const returnedCases = doctorCases.filter(c => c.status === '已退回').length
-    const disputedCases = doctorCases.filter(c => c.status === '争议中').length
-    const avgScore = totalCases
-      ? doctorCases.reduce((s, c) => s + c.qcTotalScore, 0) / totalCases
-      : 0
-
-    const monthMap = new Map<string, { total: number; scoreSum: number }>()
-    doctorCases.forEach(c => {
-      const m = c.examDate.slice(0, 7)
-      if (!monthMap.has(m)) monthMap.set(m, { total: 0, scoreSum: 0 })
-      const rec = monthMap.get(m)!
-      rec.total++
-      rec.scoreSum += c.qcTotalScore
-    })
-    const casesByMonth = Array.from(monthMap.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, v]) => ({
-        month,
-        count: v.total,
-        avgScore: v.total ? v.scoreSum / v.total : 0
-      }))
-
-    const issueCount = new Map<string, number>()
-    doctorCases.forEach(c => {
-      c.reportIssues.forEach(i => {
-        const k = `${i.type}-${i.field}`
-        issueCount.set(k, (issueCount.get(k) || 0) + 1)
-      })
-    })
-    const commonIssues = Array.from(issueCount.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([issue, count]) => ({ issue, count }))
-
-    return {
-      doctorId: d.id,
-      doctorName: d.name,
-      totalCases,
-      passedCases,
-      returnedCases,
-      disputedCases,
-      avgScore,
-      casesByMonth,
-      commonIssues
-    }
-  })
-}
-
-function buildMonthlySummaryCustom(cases: CaseRecord[], monthsBack = 6): MonthlySummary[] {
-  const result: MonthlySummary[] = []
-  for (let m = monthsBack - 1; m >= 0; m--) {
-    const d = new Date()
-    d.setMonth(d.getMonth() - m)
-    const monthStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-    const monthCases = cases.filter(c => c.examDate.startsWith(monthStr))
-    const totalCases = monthCases.length
-    const reviewedCases = monthCases.filter(c => c.status !== '待复核' && c.status !== '复核中').length
-    const passedCases = monthCases.filter(c => c.status === '已通过').length
-    const returnedCases = monthCases.filter(c => c.status === '已退回').length
-    const disputedCases = monthCases.filter(c => c.status === '争议中').length
-
-    const passRate = reviewedCases ? passedCases / reviewedCases : 0
-    const returnRate = reviewedCases ? returnedCases / reviewedCases : 0
-    const disputeRate = reviewedCases ? disputedCases / reviewedCases : 0
-    const avgScore = reviewedCases
-      ? monthCases.filter(c => c.status !== '待复核').reduce((s, c) => s + c.qcTotalScore, 0) / reviewedCases
-      : 0
-
-    const problemCount = new Map<string, number>()
-    monthCases.forEach(c => c.reportIssues.forEach(i => {
-      problemCount.set(i.type, (problemCount.get(i.type) || 0) + 1)
-    }))
-    const totalIssues = Array.from(problemCount.values()).reduce((a, b) => a + b, 0) || 1
-    const commonProblems = Array.from(problemCount.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([problem, count]) => ({ problem, count, rate: count / totalIssues }))
-
-    const doctorCaseMap = new Map<string, { cases: CaseRecord[] }>()
-    monthCases.forEach(c => {
-      if (!doctorCaseMap.has(c.doctor.id)) doctorCaseMap.set(c.doctor.id, { cases: [] })
-      doctorCaseMap.get(c.doctor.id)!.cases.push(c)
-    })
-    const doctorRankings = Array.from(doctorCaseMap.entries())
-      .map(([did, { cases }]) => {
-        const dc = doctors.find(x => x.id === did)!
-        const rev = cases.filter(c => c.status !== '待复核' && c.status !== '复核中')
-        const pass = cases.filter(c => c.status === '已通过').length
-        return {
-          doctorName: dc.name,
-          cases: cases.length,
-          avgScore: rev.length ? rev.reduce((s, c) => s + c.qcTotalScore, 0) / rev.length : 0,
-          passRate: rev.length ? pass / rev.length : 0
-        }
-      })
-      .sort((a, b) => b.avgScore - a.avgScore)
-
-    result.push({
-      month: monthStr,
-      totalCases,
-      reviewedCases,
-      passRate,
-      returnRate,
-      disputeRate,
-      avgScore,
-      commonProblems,
-      doctorRankings
-    })
-  }
-  return result
-}
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => {

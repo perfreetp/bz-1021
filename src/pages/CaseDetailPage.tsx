@@ -33,13 +33,13 @@ const lesionClass: Record<LesionType, string> = {
 
 const CaseDetailPage: React.FC = () => {
   const { message } = App.useApp()
-  const { cases, setCurrentCase, getCurrentCase, selectedKeyFrames, toggleKeyFrame, clearKeyFrames } = useAppStore()
+  const { cases, setCurrentCase, getCurrentCase, selectedKeyFrames, toggleKeyFrame, clearKeyFrames, currentCaseId } = useAppStore()
   const [previewKf, setPreviewKf] = useState<string | null>(null)
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
 
   useEffect(() => {
     const params = getQueryParams()
-    const id = params.caseId
+    const id = params.caseId || currentCaseId
     const caseList = cases
     const target = id
       ? caseList.find(c => c.id === id)
@@ -49,7 +49,7 @@ const CaseDetailPage: React.FC = () => {
       setSelectedCaseId(target.id)
       clearKeyFrames()
     }
-  }, [])
+  }, [currentCaseId])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 

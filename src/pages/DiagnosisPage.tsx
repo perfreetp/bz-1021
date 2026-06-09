@@ -22,7 +22,7 @@ type BiopsyRequirement = {
 
 const DiagnosisPage: React.FC = () => {
   const { message } = App.useApp()
-  const { cases, setCurrentCase, setLesionGrade, setBiopsyVerification, setBiopsyAssessment, getCurrentCase } = useAppStore()
+  const { cases, currentCaseId, setCurrentCase, setLesionGrade, setBiopsyVerification, setBiopsyAssessment, getCurrentCase } = useAppStore()
   const [selectedCaseId, setSelectedCaseId] = useState<string | undefined>()
   const [lesionGrades, setLesionGrades] = useState<Record<string, {
     grade: string; size?: number; parisType?: PolypGrade; inflLevel?: InflammationGrade; ulcerStage?: UlcerStage; marginClear?: boolean; biopsyRecommended?: BiopsyRequirement
@@ -34,7 +34,7 @@ const DiagnosisPage: React.FC = () => {
 
   useEffect(() => {
     const params = getQueryParams()
-    const id = params.caseId
+    const id = params.caseId || currentCaseId
     const caseList = cases
     const target = id
       ? caseList.find(c => c.id === id)
@@ -74,7 +74,7 @@ const DiagnosisPage: React.FC = () => {
       })
       setBiopsyChecks(initBio)
     }
-  }, [cases.length])
+  }, [cases.length, currentCaseId])
 
   const case_ = selectedCaseId ? cases.find(c => c.id === selectedCaseId) : undefined
 
