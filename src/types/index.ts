@@ -95,6 +95,18 @@ export interface DisputeRecord {
   resolution?: string
 }
 
+export interface AuditLog {
+  id: string
+  action: '状态变更' | '评分修改' | '意见更新' | '标注变更' | '问题修改' | '争议新增' | '争议解决'
+  operator: string
+  timestamp: string
+  fromStatus?: CaseStatus
+  toStatus?: CaseStatus
+  totalScore?: number
+  comment?: string
+  note?: string
+}
+
 export interface ImageAnnotation {
   id: string
   frameId: string
@@ -161,6 +173,7 @@ export interface CaseRecord {
   lesionGrades: Record<string, LesionGradeRecord>
   biopsyVerifications: Record<string, BiopsyVerification>
   biopsyAssessment?: BiopsyAssessment
+  auditLogs: AuditLog[]
   lastModified: string
 }
 
@@ -180,6 +193,9 @@ export interface MonthlySummary {
   month: string
   totalCases: number
   reviewedCases: number
+  passedCases: number
+  returnedCases: number
+  disputedCases: number
   passRate: number
   returnRate: number
   disputeRate: number

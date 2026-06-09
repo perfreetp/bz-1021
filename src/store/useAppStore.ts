@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type {
   CaseRecord, CaseStatus, ExamType, QCScores, BroadcastEvent,
   ImageAnnotation, ReportIssue, DisputeRecord, LesionGradeRecord,
-  BiopsyVerification, BiopsyAssessment
+  BiopsyVerification, BiopsyAssessment, AuditLog
 } from '../types'
 import { caseRecords as initialCases, doctors, qcRules } from '../data/mockData'
 import type { DoctorStats, MonthlySummary } from '../types'
@@ -64,6 +64,7 @@ const mergeCases = (persisted: CaseRecord[], fresh: CaseRecord[]): CaseRecord[] 
       lesionGrades: pc.lesionGrades ?? {},
       biopsyVerifications: pc.biopsyVerifications ?? {},
       biopsyAssessment: pc.biopsyAssessment,
+      auditLogs: pc.auditLogs ?? [],
       lastModified: pc.lastModified || (fc ? fc.lastModified : new Date().toISOString()),
       reportIssues: Array.isArray(pc.reportIssues) && pc.reportIssues.length > 0
         ? pc.reportIssues
@@ -127,8 +128,12 @@ interface AppState {
   addDispute: (caseId: string, dispute: Omit<DisputeRecord, 'id' | 'timestamp' | 'status'>) => void
   resolveDispute: (caseId: string, disputeId: string, resolution: string) => void
 
+  addAuditLog: (caseId: string, log: Omit<AuditLog, 'id' | 'timestamp'>) => void
+
   submitReview: (caseId: string, status: '已通过' | '已退回' | '争议中') => boolean
   calculateTotalScore: (caseId: string) => number
+
+  filterStatsCases: (query: { doctorId?: string; month?: string; issueType?: string; status?: CaseStatus }) => CaseRecord[]
 
   doctorStats: DoctorStats[]
   monthlySummary: MonthlySummary[]
@@ -306,6 +311,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   resolveDispute: (caseId, disputeId, resolution) => {
+    const case_ = get().cases.find(c => c.id === caseId)
+    const reviewer = case_?.reviewer || '质控科张医生'
     get()._updateCase(caseId, c => {
       const d = c.disputes.find(x => x.id === disputeId)
       if (d) { d.status = '已解决'; d.resolution = resolution }
@@ -313,15 +320,38 @@ export const useAppStore = create<AppState>((set, get) => ({
         c.status = '复核中'
       }
     })
+    get().addAuditLog(caseId, { action: '争议解决', operator: reviewer, note: resolution })
+  },
+
+  addAuditLog: (caseId, log) => {
+    get()._updateCase(caseId, c => {
+      c.auditLogs = c.auditLogs || []
+      c.auditLogs.unshift({
+        ...log,
+        id: 'LOG-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+        timestamp: new Date().toISOString().slice(0, 19).replace('T', ' ')
+      })
+    })
   },
 
   submitReview: (caseId, status) => {
+    const case_ = get().cases.find(c => c.id === caseId)
+    const fromStatus = case_?.status
+    const reviewer = case_?.reviewer || '质控科张医生'
     const totalScore = get().calculateTotalScore(caseId)
     get()._updateCase(caseId, c => {
       c.status = status
       c.qcTotalScore = totalScore
-      c.reviewer = c.reviewer || '质控科张医生'
+      c.reviewer = reviewer
       c.reviewDate = new Date().toISOString().slice(0, 10)
+    })
+    get().addAuditLog(caseId, {
+      action: '状态变更',
+      operator: reviewer,
+      fromStatus,
+      toStatus: status,
+      totalScore,
+      comment: case_?.reviewComment || ''
     })
     broadcast({ type: 'DATA_REFRESHED' })
     return true
@@ -331,6 +361,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     const case_ = get().cases.find(c => c.id === caseId)
     if (!case_) return 0
     return qcRules.reduce((sum, r) => sum + (case_.qcScores[r.id] ?? r.maxScore), 0)
+  },
+
+  filterStatsCases: (query) => {
+    const { cases } = get()
+    return cases.filter(c => {
+      if (query.doctorId && c.doctor.id !== query.doctorId) return false
+      if (query.month && !c.examDate.startsWith(query.month)) return false
+      if (query.status && c.status !== query.status) return false
+      if (query.issueType && !c.reportIssues.some(i => i.type === query.issueType)) return false
+      return true
+    })
   },
 
   refreshDerived: () => {

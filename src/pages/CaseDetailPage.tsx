@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import {
   Row, Col, Card, Descriptions, Tag, Button, Space, Image, Timeline,
-  List, Badge, Divider, Avatar, Tooltip, App, Modal, Progress
+  List, Badge, Divider, Avatar, Tooltip, App, Modal, Progress,
+  Steps, Empty
 } from 'antd'
+import type { AuditLog } from '../types'
 import {
   UserOutlined, ClockCircleOutlined, FileTextOutlined,
   PictureOutlined, BulbOutlined, AuditOutlined, TrophyOutlined,
@@ -273,6 +275,106 @@ const CaseDetailPage: React.FC = () => {
                 { label: case_.endTime, children: '退镜结束，患者安返', color: 'green' }
               ]}
             />
+          </Card>
+
+          <Card className="info-card" style={{ marginBottom: 16 }}>
+            <div className="card-header">
+              <h3><AuditOutlined /> 复核流水历史
+                <Tag style={{ marginLeft: 8 }} color="blue">{case_.auditLogs.length}</Tag>
+              </h3>
+            </div>
+            {case_.auditLogs.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="暂无复核流水，首次提交复核后自动生成记录"
+                style={{ padding: '20px 0' }}
+              />
+            ) : (
+              <Steps
+                direction="vertical"
+                size="small"
+                current={-1}
+                items={case_.auditLogs.map((log: AuditLog) => {
+                  const isStatusChange = log.action === '状态变更'
+                  const isScoreChange = log.action === '评分修改'
+                  const isDispute = log.action === '争议新增'
+                  const isDisputeResolved = log.action === '争议解决'
+                  const isReturn = isStatusChange && log.toStatus === '已退回'
+                  const isPass = isStatusChange && log.toStatus === '已通过'
+                  let stepColor: string = 'blue'
+                  if (isReturn) stepColor = 'red'
+                  else if (isPass) stepColor = 'green'
+                  else if (isDispute || isDisputeResolved) stepColor = 'orange'
+
+                  const actionTagColor: Record<string, string> = {
+                    '状态变更': 'blue',
+                    '评分修改': 'blue',
+                    '争议新增': 'orange',
+                    '争议解决': 'orange',
+                    '退回': 'red',
+                    '通过': 'green',
+                    '意见更新': 'default',
+                    '标注变更': 'default',
+                    '问题修改': 'default'
+                  }
+
+                  const statusTagColor: Record<CaseStatus, string> = {
+                    '待复核': 'orange',
+                    '复核中': 'blue',
+                    '已通过': 'green',
+                    '已退回': 'red',
+                    '争议中': 'purple'
+                  }
+
+                  return {
+                    status: 'finish' as const,
+                    color: stepColor,
+                    title: (
+                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                        <Space>
+                          <span style={{ fontWeight: 600 }}>{log.timestamp}</span>
+                          <span style={{ color: '#8c8c8c' }}>操作人：{log.operator}</span>
+                        </Space>
+                        <Space>
+                          <Tag color={actionTagColor[log.action] || 'default'}>
+                            {log.action}
+                          </Tag>
+                          {isStatusChange && log.fromStatus && log.toStatus && (
+                            <Space size={4}>
+                              <Tag color={statusTagColor[log.fromStatus]}>{log.fromStatus}</Tag>
+                              <span style={{ color: '#8c8c8c' }}>→</span>
+                              <Tag color={statusTagColor[log.toStatus]}>{log.toStatus}</Tag>
+                            </Space>
+                          )}
+                          {log.totalScore !== undefined && (
+                            <Tag color={log.totalScore >= 85 ? 'green' : log.totalScore >= 75 ? 'blue' : 'orange'}>
+                              总分：{log.totalScore}
+                            </Tag>
+                          )}
+                        </Space>
+                        {(log.comment || log.note) && (
+                          <div
+                            style={{
+                              padding: '8px 12px',
+                              background: '#fafafa',
+                              borderRadius: 6,
+                              fontSize: 13,
+                              color: '#595959',
+                              lineHeight: 1.6,
+                              borderLeft: '3px solid #1677ff',
+                              marginTop: 4
+                            }}
+                          >
+                            {log.comment || log.note}
+                          </div>
+                        )}
+                      </Space>
+                    ),
+                    description: null
+                  }
+                })}
+              />
+            )}
           </Card>
         </Col>
 

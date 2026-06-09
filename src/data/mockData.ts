@@ -337,6 +337,7 @@ function generateCase(idx: number): CaseRecord {
       warnings: [],
       verified: true
     },
+    auditLogs: [],
     lastModified: new Date().toISOString()
   }
 }
@@ -357,6 +358,7 @@ export function buildDoctorStats(cases: CaseRecord[] = caseRecords): DoctorStats
 
     const monthMap = new Map<string, { total: number; scoreSum: number }>()
     doctorCases.forEach(c => {
+      if (c.status === '待复核' || c.status === '复核中') return
       const m = c.examDate.slice(0, 7)
       if (!monthMap.has(m)) monthMap.set(m, { total: 0, scoreSum: 0 })
       const rec = monthMap.get(m)!
@@ -451,6 +453,9 @@ export function buildMonthlySummary(monthsBack: number = 6, cases: CaseRecord[] 
       month: monthStr,
       totalCases,
       reviewedCases,
+      passedCases,
+      returnedCases,
+      disputedCases,
       passRate,
       returnRate,
       disputeRate,

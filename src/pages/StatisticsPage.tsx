@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react'
 import {
   Row, Col, Card, Tag, Button, Space, Select, DatePicker,
   Tabs, Table, Statistic, Progress, App, Tooltip, Divider,
-  List, Dropdown, Modal, Radio, Form, InputNumber, Descriptions
+  List, Dropdown, Modal, Radio, Form, InputNumber, Descriptions,
+  Drawer, Empty
 } from 'antd'
 import {
   BarChartOutlined, TrophyOutlined, UserOutlined,
@@ -15,18 +16,53 @@ import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
-import PageLayout from '../components/PageLayout'
+import PageLayout, { openWindow } from '../components/PageLayout'
 import { useAppStore, doctors, qcRules } from '../store/useAppStore'
-import type { DoctorStats, MonthlySummary } from '../types'
+import type { DoctorStats, MonthlySummary, CaseRecord, CaseStatus } from '../types'
 
 const { RangePicker } = DatePicker
 
 const StatisticsPage: React.FC = () => {
   const { message } = App.useApp()
-  const { doctorStats, monthlySummary, cases } = useAppStore()
+  const { doctorStats, monthlySummary, cases, filterStatsCases } = useAppStore()
   const [selectedDoctorId, setSelectedDoctorId] = useState<string | 'all'>('all')
   const [tabKey, setTabKey] = useState('overview')
   const [months, setMonths] = useState(6)
+  const [detailDrawer, setDetailDrawer] = useState<{
+    open: boolean
+    title: string
+    query: { doctorId?: string; month?: string; issueType?: string }
+    cases: CaseRecord[]
+  }>({
+    open: false,
+    title: '',
+    query: {},
+    cases: []
+  })
+
+  const openDrawer = (params: {
+    doctorId?: string
+    month?: string
+    issueType?: string
+    title: string
+  }) => {
+    const query = {
+      doctorId: params.doctorId,
+      month: params.month,
+      issueType: params.issueType
+    }
+    const filteredCases = filterStatsCases(query)
+    setDetailDrawer({
+      open: true,
+      title: params.title,
+      query,
+      cases: filteredCases
+    })
+  }
+
+  const closeDrawer = () => {
+    setDetailDrawer(prev => ({ ...prev, open: false }))
+  }
 
   const filteredDoctorStats = useMemo(
     () => selectedDoctorId === 'all' ? doctorStats : doctorStats.filter(d => d.doctorId === selectedDoctorId),
@@ -193,46 +229,164 @@ const StatisticsPage: React.FC = () => {
   const exportMonthlyReport = () => {
     message.loading('正在生成月度汇总...', 1)
     setTimeout(() => {
-      const lastMo = monthlySummary[monthlySummary.length - 1]
-      if (!lastMo) { message.warning('无月度数据'); return }
+      const startMonthIdx = monthlySummary.length - months
+      const targetMonths = startMonthIdx >= 0
+        ? monthlySummary.slice(startMonthIdx)
+        : monthlySummary
+      if (targetMonths.length === 0) { message.warning('无月度数据'); return }
+
+      const doctorName = selectedDoctorId === 'all'
+        ? '全部医生'
+        : (doctorStats.find(d => d.doctorId === selectedDoctorId)?.doctorName || '全部医生')
+      const doctorFilter = selectedDoctorId !== 'all' ? selectedDoctorId : null
+      const nowStr = dayjs().format('YYYY-MM-DD HH:mm:ss')
+
+      const filterCase = (c: CaseRecord) => {
+        if (!targetMonths.some(m => c.examDate.startsWith(m.month))) return false
+        if (doctorFilter && c.doctor.id !== doctorFilter) return false
+        return true
+      }
+      const filteredCases = cases.filter(filterCase)
+      const reviewedCases = filteredCases.filter(c => c.status !== '待复核' && c.status !== '复核中')
+      const exportAvg = reviewedCases.length
+        ? (reviewedCases.reduce((s, c) => s + c.qcTotalScore, 0) / reviewedCases.length).toFixed(1)
+        : '0.0'
+
       const wb = XLSX.utils.book_new()
-      const ws1 = XLSX.utils.json_to_sheet([
-        { '统计月份': lastMo.month, '总病例数': lastMo.totalCases, '已复核数': lastMo.reviewedCases, '通过率(%)': (lastMo.passRate * 100).toFixed(1), '退回率(%)': (lastMo.returnRate * 100).toFixed(1), '争议率(%)': (lastMo.disputeRate * 100).toFixed(1), '平均质控分': lastMo.avgScore.toFixed(1) }
+
+      const ws0 = XLSX.utils.json_to_sheet([
+        { '项目': '生成时间', '值': nowStr },
+        { '项目': '月份范围', '值': `${targetMonths[0].month} ~ ${targetMonths[targetMonths.length - 1].month}（共 ${targetMonths.length} 个月）` },
+        { '项目': '医生筛选', '值': doctorName },
+        { '项目': '总病例数', '值': filteredCases.length },
+        { '项目': '已完成复核', '值': reviewedCases.length },
+        { '项目': '待复核/复核中', '值': filteredCases.length - reviewedCases.length },
+        { '项目': '平均质控分（仅已完成复核）', '值': exportAvg },
+        { '项目': '统计口径说明', '值': '平均分排除「待复核」「复核中」病例；问题、排名均按上述月份与医生筛选结果' }
       ])
+      XLSX.utils.book_append_sheet(wb, ws0, '导出说明')
+
+      const ws1 = XLSX.utils.json_to_sheet(targetMonths.map(m => {
+        let total = m.totalCases
+        let reviewed = m.reviewedCases
+        let passed = m.passedCases
+        let returned = m.returnedCases
+        let disputed = m.disputedCases
+        let avgS = m.avgScore
+        if (doctorFilter) {
+          const mCases = cases.filter(c => c.examDate.startsWith(m.month) && c.doctor.id === doctorFilter)
+          total = mCases.length
+          reviewed = mCases.filter(c => c.status !== '待复核' && c.status !== '复核中').length
+          passed = mCases.filter(c => c.status === '已通过').length
+          returned = mCases.filter(c => c.status === '已退回').length
+          disputed = mCases.filter(c => c.status === '争议中').length
+          avgS = reviewed
+            ? mCases.filter(c => c.status !== '待复核' && c.status !== '复核中').reduce((s, c) => s + c.qcTotalScore, 0) / reviewed
+            : 0
+        }
+        return {
+          '统计月份': m.month,
+          '总病例数': total,
+          '已复核数': reviewed,
+          '已通过': passed,
+          '已退回': returned,
+          '争议中': disputed,
+          '通过率(%)': reviewed ? (passed / reviewed * 100).toFixed(1) : '0.0',
+          '退回率(%)': reviewed ? (returned / reviewed * 100).toFixed(1) : '0.0',
+          '争议率(%)': reviewed ? (disputed / reviewed * 100).toFixed(1) : '0.0',
+          '平均质控分': avgS.toFixed(1)
+        }
+      }))
       XLSX.utils.book_append_sheet(wb, ws1, '月度总览')
-      const ws2 = XLSX.utils.json_to_sheet(lastMo.doctorRankings.map(r => ({
-        '医生': r.doctorName, '病例数': r.cases, '平均分': r.avgScore.toFixed(1), '通过率(%)': (r.passRate * 100).toFixed(1)
+
+      const ws2 = XLSX.utils.json_to_sheet(filteredDoctorStats.map(d => ({
+        '医生': d.doctorName,
+        '总病例数': d.totalCases,
+        '已通过': d.passedCases,
+        '已退回': d.returnedCases,
+        '争议中': d.disputedCases,
+        '平均分(仅已完成复核)': d.avgScore.toFixed(1),
+        '通过率(%)': d.totalCases
+          ? (d.passedCases / Math.max(1, (d.passedCases + d.returnedCases + d.disputedCases)) * 100).toFixed(1)
+          : '0.0'
       })))
       XLSX.utils.book_append_sheet(wb, ws2, '医生排名')
-      const ws3 = XLSX.utils.json_to_sheet(lastMo.commonProblems.map(p => ({
-        '问题类型': p.problem, '数量': p.count, '占比(%)': (p.rate * 100).toFixed(1)
-      })))
-      XLSX.utils.book_append_sheet(wb, ws3, '常见问题')
-      const ws4 = XLSX.utils.json_to_sheet(cases.filter(c => c.examDate.startsWith(lastMo.month)).map(c => ({
-        '病例号': c.caseNo, '日期': c.examDate, '患者': c.patient.name, '类型': c.examType,
-        '医生': c.doctor.name, '诊断': c.diagnosis, '质控分': c.qcTotalScore, '状态': c.status,
-        '复核人': c.reviewer || '', '问题数': c.reportIssues.length
-      })))
+
+      const probMap = new Map<string, number>()
+      filteredCases.forEach(c => c.reportIssues.forEach(i => {
+        probMap.set(i.type, (probMap.get(i.type) || 0) + 1)
+      }))
+      const totalProblems = Array.from(probMap.values()).reduce((a, b) => a + b, 0) || 1
+      const ws3 = XLSX.utils.json_to_sheet(Array.from(probMap.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([problem, count]) => ({
+          '问题类型': problem,
+          '数量': count,
+          '占比(%)': (count / totalProblems * 100).toFixed(1)
+        })))
+      XLSX.utils.book_append_sheet(wb, ws3, '问题分布')
+
+      const ws4 = XLSX.utils.json_to_sheet(filteredCases.map(c => {
+        const scoreReviewed = (c.status !== '待复核' && c.status !== '复核中') ? c.qcTotalScore : null
+        return {
+          '病例号': c.caseNo,
+          '日期': c.examDate,
+          '患者': c.patient.name,
+          '性别': c.patient.gender,
+          '年龄': c.patient.age,
+          '检查类型': c.examType,
+          '医生': c.doctor.name,
+          '职称': c.doctor.title,
+          '诊断': c.diagnosis,
+          '质控分（已完成复核显示）': scoreReviewed !== null ? scoreReviewed : '（未完成）',
+          '状态': c.status,
+          '复核人': c.reviewer || '',
+          '复核日期': c.reviewDate || '',
+          '问题数': c.reportIssues.length,
+          '病灶数': c.lesions.length,
+          '是否已评分': scoreReviewed !== null ? '是' : '否'
+        }
+      }))
       XLSX.utils.book_append_sheet(wb, ws4, '病例明细')
+
       const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
       saveAs(new Blob([buf], { type: 'application/octet-stream' }),
-        `内镜质控月度汇总_${lastMo.month}.xlsx`)
-      message.success('月度汇总报告已导出')
+        `内镜质控月度汇总_${targetMonths[0].month}-${targetMonths[targetMonths.length - 1].month}_${doctorName}.xlsx`)
+      message.success('月度汇总报告已导出（含筛选说明、总览、排名、问题、明细5张表）')
     }, 1200)
   }
 
   const exportDoctorReport = () => {
     const wb = XLSX.utils.book_new()
-    doctorStats.forEach(d => {
-      const ws = XLSX.utils.json_to_sheet([
+    const nowStr = dayjs().format('YYYY-MM-DD HH:mm:ss')
+    filteredDoctorStats.forEach(d => {
+      const sheetRows = [
+        { '项目': '生成时间', '值': nowStr },
         { '项目': '医生姓名', '值': d.doctorName },
+        { '项目': '统计口径', '值': `近${months}个月数据，平均分排除待复核/复核中` },
         { '项目': '总病例数', '值': d.totalCases },
         { '项目': '通过数', '值': d.passedCases },
         { '项目': '退回数', '值': d.returnedCases },
         { '项目': '争议数', '值': d.disputedCases },
         { '项目': '通过率(%)', '值': ((d.totalCases - d.returnedCases - d.disputedCases) / Math.max(1, d.totalCases) * 100).toFixed(1) },
-        { '项目': '平均质控分', '值': d.avgScore.toFixed(1) }
-      ])
+        { '项目': '平均质控分(仅已完成复核)', '值': d.avgScore.toFixed(1) }
+      ]
+      if (d.casesByMonth) {
+        sheetRows.push({ '项目': '——月度趋势（以下）', '值': '' })
+        d.casesByMonth.forEach(m => {
+          sheetRows.push({
+            '项目': `${m.month} 病例数 / 平均分`,
+            '值': `${m.count} 例 / ${m.avgScore.toFixed(1)} 分`
+          })
+        })
+      }
+      if (d.commonIssues) {
+        sheetRows.push({ '项目': '——常见问题 TOP（以下）', '值': '' })
+        d.commonIssues.forEach(p => {
+          sheetRows.push({ '项目': p.issue, '值': p.count })
+        })
+      }
+      const ws = XLSX.utils.json_to_sheet(sheetRows)
       XLSX.utils.book_append_sheet(wb, ws, d.doctorName)
     })
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
@@ -379,7 +533,65 @@ const StatisticsPage: React.FC = () => {
                     <div className="card-header">
                       <h3><TrophyOutlined /> 医生质控分排名</h3>
                     </div>
-                    <ReactECharts option={doctorRankingOption} style={{ height: 360 }} />
+                    <Table
+                      size="small"
+                      pagination={false}
+                      dataSource={[...doctorStats].sort((a, b) => b.avgScore - a.avgScore)}
+                      rowKey="doctorId"
+                      columns={[
+                        {
+                          title: '排名',
+                          width: 60,
+                          align: 'center',
+                          render: (_v, _r, idx) => (
+                            <Tag color={idx === 0 ? 'gold' : idx === 1 ? 'blue' : idx === 2 ? 'cyan' : 'default'}
+                              style={{ width: 32, textAlign: 'center', marginInlineEnd: 0 }}>
+                              {idx + 1}
+                            </Tag>
+                          )
+                        },
+                        {
+                          title: '医生',
+                          dataIndex: 'doctorName',
+                          width: 90,
+                          render: (v, r) => (
+                            <a onClick={() => openDrawer({ doctorId: r.doctorId, title: '医生明细：' + v })}>
+                              <b>{v}</b>
+                            </a>
+                          )
+                        },
+                        {
+                          title: '病例',
+                          dataIndex: 'totalCases',
+                          width: 60,
+                          align: 'center'
+                        },
+                        {
+                          title: '质控分',
+                          dataIndex: 'avgScore',
+                          width: 80,
+                          align: 'center',
+                          render: v => (
+                            <b style={{
+                              color: v >= 90 ? '#52c41a' : v >= 80 ? '#1677ff' : v >= 70 ? '#fa8c16' : '#ff4d4f'
+                            }}>
+                              {v.toFixed(1)}
+                            </b>
+                          )
+                        },
+                        {
+                          title: '得分表现',
+                          render: (_v, r: DoctorStats) => (
+                            <Progress
+                              percent={Math.round(r.avgScore)}
+                              showInfo={false}
+                              size="small"
+                              strokeColor={r.avgScore >= 90 ? '#52c41a' : r.avgScore >= 80 ? '#1677ff' : r.avgScore >= 70 ? '#fa8c16' : '#ff4d4f'}
+                            />
+                          )
+                        }
+                      ]}
+                    />
                   </Card>
                 </Col>
                 <Col xs={24} lg={12}>
@@ -393,7 +605,10 @@ const StatisticsPage: React.FC = () => {
                       dataSource={monthlySummary[monthlySummary.length - 1]?.commonProblems || []}
                       locale={{ emptyText: '暂无数据' }}
                       renderItem={(p, i) => (
-                        <List.Item>
+                        <List.Item
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => openDrawer({ issueType: p.problem, title: '问题明细：' + p.problem })}
+                        >
                           <List.Item.Meta
                             avatar={
                               <Tag color={
@@ -402,7 +617,7 @@ const StatisticsPage: React.FC = () => {
                                 TOP {i + 1}
                               </Tag>
                             }
-                            title={<b>{p.problem}</b>}
+                            title={<b style={{ color: '#1677ff' }}>{p.problem}</b>}
                             description={`${p.count} 例（占比 ${(p.rate * 100).toFixed(1)}%）`}
                           />
                           <Progress
@@ -603,7 +818,11 @@ const StatisticsPage: React.FC = () => {
                     dataSource={monthlySummary.slice(-months)}
                     columns={[
                       { title: '月份', dataIndex: 'month', fixed: 'left', width: 110,
-                        render: v => <b style={{ color: '#1677ff' }}>{v}</b> },
+                        render: v => (
+                          <a onClick={() => openDrawer({ month: v, title: '月份明细：' + v })}>
+                            <b style={{ color: '#1677ff' }}>{v}</b>
+                          </a>
+                        ) },
                       { title: '总病例', dataIndex: 'totalCases', width: 90, align: 'center', sorter: (a, b) => a.totalCases - b.totalCases },
                       { title: '已复核', dataIndex: 'reviewedCases', width: 90, align: 'center' },
                       {
@@ -723,6 +942,168 @@ const StatisticsPage: React.FC = () => {
           }
         ]}
       />
+
+      <Drawer
+        title={detailDrawer.title}
+        placement="right"
+        width={900}
+        open={detailDrawer.open}
+        onClose={closeDrawer}
+        destroyOnClose
+      >
+        {detailDrawer.cases.length === 0 ? (
+          <Empty description="暂无符合条件的病例" />
+        ) : (
+          <>
+            <Table
+              size="small"
+              bordered
+              pagination={{ pageSize: 8, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+              dataSource={detailDrawer.cases}
+              rowKey="id"
+              scroll={{ x: 900 }}
+              columns={[
+                {
+                  title: '病例号',
+                  dataIndex: 'caseNo',
+                  width: 140,
+                  fixed: 'left',
+                  render: (v, r: CaseRecord) => (
+                    <Space>
+                      <b>{v}</b>
+                      <Tag color={
+                        r.status === '已通过' ? 'green' :
+                        r.status === '已退回' ? 'red' :
+                        r.status === '争议中' ? 'purple' :
+                        r.status === '复核中' ? 'blue' : 'orange'
+                      }>{r.status}</Tag>
+                    </Space>
+                  )
+                },
+                { title: '患者姓名', dataIndex: ['patient', 'name'], width: 90 },
+                {
+                  title: '性别年龄',
+                  width: 90,
+                  render: (_v, r: CaseRecord) => (
+                    <span>{r.patient.gender} · {r.patient.age}岁</span>
+                  )
+                },
+                { title: '检查日期', dataIndex: 'examDate', width: 110 },
+                { title: '检查类型', dataIndex: 'examType', width: 90 },
+                { title: '操作医生', dataIndex: ['doctor', 'name'], width: 90 },
+                {
+                  title: '质控分',
+                  dataIndex: 'qcTotalScore',
+                  width: 90,
+                  align: 'center',
+                  render: v => (
+                    <b style={{ color: v < 80 ? '#ff4d4f' : v < 90 ? '#fa8c16' : '#52c41a' }}>
+                      {v}
+                    </b>
+                  )
+                },
+                {
+                  title: '诊断',
+                  dataIndex: 'diagnosis',
+                  ellipsis: true,
+                  render: v => v.slice(0, 30) + (v.length > 30 ? '...' : '')
+                },
+                {
+                  title: '操作',
+                  key: 'action',
+                  width: 170,
+                  fixed: 'right',
+                  render: (_v, r: CaseRecord) => (
+                    <Space size={4}>
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => openWindow('case-detail', {
+                          caseId: r.id,
+                          caseNo: r.caseNo,
+                          patientName: r.patient.name
+                        })}
+                      >
+                        病例详情
+                      </Button>
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => openWindow('qc-score', {
+                          caseId: r.id,
+                          caseNo: r.caseNo,
+                          patientName: r.patient.name
+                        })}
+                      >
+                        质控评分
+                      </Button>
+                    </Space>
+                  )
+                }
+              ]}
+            />
+            <Divider style={{ margin: '16px 0 12px' }} />
+            <Card size="small" title="统计汇总" style={{ marginTop: 12 }}>
+              <Row gutter={[12, 12]}>
+                <Col span={6}>
+                  <Statistic title="总病例数" value={detailDrawer.cases.length} />
+                </Col>
+                <Col span={6}>
+                  <Statistic
+                    title="已通过"
+                    value={detailDrawer.cases.filter(c => c.status === '已通过').length}
+                    valueStyle={{ color: '#52c41a' }}
+                  />
+                </Col>
+                <Col span={6}>
+                  <Statistic
+                    title="已退回"
+                    value={detailDrawer.cases.filter(c => c.status === '已退回').length}
+                    valueStyle={{ color: '#ff4d4f' }}
+                  />
+                </Col>
+                <Col span={6}>
+                  <Statistic
+                    title="争议中"
+                    value={detailDrawer.cases.filter(c => c.status === '争议中').length}
+                    valueStyle={{ color: '#722ed1' }}
+                  />
+                </Col>
+                <Col span={24}>
+                  {(() => {
+                    const reviewed = detailDrawer.cases.filter(
+                      c => c.status !== '待复核' && c.status !== '复核中'
+                    )
+                    const avg = reviewed.length
+                      ? reviewed.reduce((s, c) => s + c.qcTotalScore, 0) / reviewed.length
+                      : 0
+                    return (
+                      <div style={{
+                        padding: '8px 12px',
+                        background: '#f6ffed',
+                        borderRadius: 6,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}>
+                        <span style={{ color: '#8c8c8c' }}>
+                          平均质控分（仅已完成复核 {reviewed.length} 例）
+                        </span>
+                        <b style={{
+                          fontSize: 20,
+                          color: avg >= 85 ? '#52c41a' : avg >= 75 ? '#fa8c16' : '#ff4d4f'
+                        }}>
+                          {avg.toFixed(1)} / 100
+                        </b>
+                      </div>
+                    )
+                  })()}
+                </Col>
+              </Row>
+            </Card>
+          </>
+        )}
+      </Drawer>
     </PageLayout>
   )
 }
